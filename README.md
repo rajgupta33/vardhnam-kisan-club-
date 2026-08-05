@@ -1,6 +1,17 @@
 # Vardhnam Agrotech Marketplace
 
-Phase 4E foundation for the Vardhnam Agrotech managed agriculture marketplace.
+Managed agriculture marketplace for Vardhnam Agrotech.
+
+> ## 📖 New to this project? Start here.
+>
+> 1. **[docs/HANDOVER.md](docs/HANDOVER.md)** — what is built, what is partial, what is missing, and every known trap in the repository.
+> 2. **[docs/REMAINING_IMPLEMENTATION_PLAN.md](docs/REMAINING_IMPLEMENTATION_PLAN.md)** — the remaining work as 16 numbered work packages with schema, endpoints, acceptance criteria and tests.
+> 3. **[AGENTS.md](AGENTS.md)** — permanent business truths and engineering rules. Non-negotiable.
+>
+> Backend is complete through Phase 5 finance and Phase 6 attribution/payouts, plus
+> support tickets, Tally sync abstraction, notification abstraction and dashboards.
+> All external providers are still mock. Returns/refunds, the service marketplace and
+> the partner mobile app are not started.
 
 ## Applications
 

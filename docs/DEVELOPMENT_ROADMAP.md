@@ -1,5 +1,9 @@
 # Development Roadmap
 
+> **Status note (2026-08-06):** This file records the phase-by-phase build log.
+> For the authoritative current state and the plan for all remaining work, read
+> `docs/HANDOVER.md` and `docs/REMAINING_IMPLEMENTATION_PLAN.md`.
+
 ## Phase 0 - Foundation
 
 - Repository scaffold
@@ -102,28 +106,46 @@
 - Completed Phase 4F: `DELIVERY_PARTNER` organisation type (see `docs/DECISIONS/0002-organisation-type-naming.md`)
 - Future: real notification delivery, geotagged proof capture, payout calculation and partner-app delivery workflows
 
+## Phase 1D - Authentication
+
+- Completed Phase 1D: OTP challenge model with hashed codes, expiry and attempt limits
+- Completed Phase 1D: JWT access tokens, persisted rotatable refresh tokens, logout
+- Completed Phase 1D: organisation selection for multi-organisation users
+- Completed Phase 1D: rate limiting on OTP endpoints and authentication integration coverage
+- Remaining Phase 1D: real SMS/WhatsApp OTP delivery (`mockOtpCode` is returned only while `SMS_PROVIDER=mock`)
+
 ## Phase 5 - Finance
 
-- Payment ledger
-- Commission rules
-- Promoter attribution
-- Distributor payable
-- Settlements
-- Refunds and reconciliation
+- Completed Phase 5: commission rules with status lifecycle and applicability resolution
+- Completed Phase 5: commission entries auto-created on delivery, provisional to final after the return window, with explicit reversal
+- Completed Phase 5: financial ledger separating farmer payment, distributor payable, marketplace commission, fulfilment fee, delivery fee and promoter commission
+- Completed Phase 5: settlement creation with generated settlement numbers, status lifecycle and audit
+- Remaining Phase 5: refunds and reconciliation (see WP-05 and WP-07 in `docs/REMAINING_IMPLEMENTATION_PLAN.md`)
 
 ## Phase 6 - Partner Network
 
-- Promoter app workflows
-- Delivery partner workflows
-- Service provider workflows
-- Service listings and bookings
-- Earnings and payouts
+- Completed Phase 6: promoter attribution create/revoke/list with the single-primary-attribution rule and a promoter commission ledger entry type
+- Completed Phase 6: payout accounts with self-service upsert, admin verification and partner earnings statements
+- Completed Phase 6: delivery fee support in the financial ledger
+- Remaining Phase 6: promoter app workflows (WP-13), delivery partner app workflows (WP-12), service provider workflows, service listings and service bookings (WP-14)
 
 ## Phase 7 - Integrations and Analytics
 
-- Notification providers
-- Payment provider sandbox
-- Tally export and sync abstraction
-- Dashboards
-- Inventory ageing
-- Demand reports
+- Completed Phase 7: notification abstraction with channels, categories, payload snapshots, attempts, statuses and read receipts (mock delivery only)
+- Completed Phase 7: Tally sync abstraction with sync records, attempts, retry state and a reconciliation endpoint (mock provider only)
+- Completed Phase 7: permission-scoped dashboard summary API with audited export
+- Completed cross-cutting: support ticket lifecycle (create, assign, wait, resume, escalate, resolve, close, reopen) with evidence
+- Remaining Phase 7: real notification providers and event wiring (WP-06), sandbox payment provider and signed webhooks (WP-07), portal dashboard wiring and demand reports (WP-09)
+
+## Not Started
+
+- Returns, refunds and disputes (WP-05) - the `ProductOrderStatus` return/refund/dispute values exist but no code can produce them
+- Service marketplace (WP-14)
+- Partner mobile application beyond the static skeleton (WP-12, WP-13)
+- Product reviews and ratings
+- File and document storage - all document handling is metadata only today (WP-08)
+- Background job infrastructure - `bullmq` is installed but unused (WP-04)
+- Distributor allocation engine with recorded allocation reasons (WP-15)
+- GST modelling and invoice PDFs (WP-15)
+- Runtime internationalisation (WP-11)
+- Deployment infrastructure and observability (WP-16)
