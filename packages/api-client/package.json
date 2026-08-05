@@ -1,0 +1,19 @@
+{
+  "name": "@vardhnam/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "eslint": "^9.11.1",
+    "@eslint/js": "^9.11.1",
+    "typescript-eslint": "^8.7.0"
+  }
+}

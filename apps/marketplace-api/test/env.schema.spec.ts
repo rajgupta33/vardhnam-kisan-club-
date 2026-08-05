@@ -1,0 +1,25 @@
+import { validateEnv } from '../src/config/env.schema';
+
+describe('environment validation', () => {
+  it('accepts valid Phase 0 environment variables', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/vardhnam',
+      REDIS_URL: 'redis://localhost:6379',
+      JWT_ACCESS_SECRET: 'a'.repeat(32),
+    });
+
+    expect(env.PORT).toBe(3001);
+    expect(env.AUTH_MODE).toBe('mock');
+    expect(env.PAYMENT_PROVIDER).toBe('mock');
+  });
+
+  it('rejects non-mock production provider values', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/vardhnam',
+        REDIS_URL: 'redis://localhost:6379',
+        PAYMENT_PROVIDER: 'real',
+      }),
+    ).toThrow(/PAYMENT_PROVIDER/);
+  });
+});

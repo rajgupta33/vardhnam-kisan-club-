@@ -1,0 +1,45 @@
+{
+  "name": "vardhnam-agrotech",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Managed agriculture marketplace monorepo for Vardhnam Agrotech.",
+  "workspaces": [
+    "apps/marketplace-api",
+    "apps/business-web",
+    "packages/shared-types",
+    "packages/validation",
+    "packages/api-client",
+    "packages/design-tokens"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:api": "npm --workspace @vardhnam/marketplace-api run start:dev",
+    "dev:web": "npm --workspace @vardhnam/business-web run dev",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "test": "npm run test --workspaces --if-present",
+    "test:scaffold": "node --test scripts/phase0.test.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "prisma:generate": "npm --workspace @vardhnam/marketplace-api run prisma:generate",
+    "prisma:migrate": "npm --workspace @vardhnam/marketplace-api run prisma:migrate",
+    "seed": "npm --workspace @vardhnam/marketplace-api run seed",
+    "seed:demo": "npm --workspace @vardhnam/marketplace-api run seed:demo"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  },
+  "overrides": {
+    "@nestjs/swagger": {
+      "js-yaml": "^5.2.2"
+    },
+    "next": {
+      "postcss": "^8.5.18",
+      "sharp": "^0.35.0"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0",
+    "npm": ">=10.0.0"
+  }
+}

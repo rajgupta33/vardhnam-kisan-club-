@@ -1,0 +1,114 @@
+name: Phase 3D CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  node:
+    name: Node workspaces
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vardhnam
+          POSTGRES_PASSWORD: vardhnam_dev_password
+          POSTGRES_DB: vardhnam_agrotech
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vardhnam -d vardhnam_agrotech"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      API_PREFIX: api/v1
+      CORS_ORIGIN: http://localhost:3000
+      LOG_LEVEL: error
+      AUTH_MODE: mock
+      DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech?schema=public
+      REDIS_URL: redis://localhost:6379
+      SMS_PROVIDER: mock
+      WHATSAPP_PROVIDER: mock
+      EMAIL_PROVIDER: mock
+      PAYMENT_PROVIDER: mock
+      TALLY_PROVIDER: mock
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Deploy migrations
+        run: npm --workspace @vardhnam/marketplace-api run prisma:deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Integration tests
+        run: npm --workspace @vardhnam/marketplace-api run test:integration
+
+      - name: Scaffold self-check
+        run: npm run test:scaffold
+
+      - name: Build
+        run: npm run build
+
+  flutter:
+    name: Flutter apps
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app:
+          - apps/farmer-mobile
+          - apps/partner-mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install Flutter dependencies
+        working-directory: ${{ matrix.app }}
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: ${{ matrix.app }}
+        run: flutter analyze
+
+      - name: Test
+        working-directory: ${{ matrix.app }}
+        run: flutter test

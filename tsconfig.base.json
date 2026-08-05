@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@vardhnam/shared-types": ["packages/shared-types/src/index.ts"],
+      "@vardhnam/validation": ["packages/validation/src/index.ts"],
+      "@vardhnam/api-client": ["packages/api-client/src/index.ts"],
+      "@vardhnam/design-tokens": ["packages/design-tokens/src/index.ts"]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+name: vardhnam_farmer_mobile
+description: Farmer mobile application for Vardhnam Agrotech.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true
