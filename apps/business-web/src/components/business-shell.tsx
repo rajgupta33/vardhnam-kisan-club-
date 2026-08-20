@@ -1,8 +1,12 @@
 import Link from 'next/link';
+import { logoutAction } from '../app/login/actions';
 import { portalCopy } from '../content/portal-copy';
+import { readPortalSession } from '../lib/auth-session';
+
+type NavKey = (typeof portalCopy.navItems)[number]['key'];
 
 interface BusinessShellProps {
-  active: 'onboarding' | 'catalogue' | 'inventory' | 'offers' | 'orders' | 'audit';
+  active: NavKey;
   eyebrow: string;
   title: string;
   statuses: ReadonlyArray<{
@@ -12,7 +16,19 @@ interface BusinessShellProps {
   children: React.ReactNode;
 }
 
-export function BusinessShell({ active, eyebrow, title, statuses, children }: BusinessShellProps) {
+export async function BusinessShell({
+  active,
+  eyebrow,
+  title,
+  statuses,
+  children,
+}: BusinessShellProps) {
+  const session = await readPortalSession();
+  const permissions = session?.permissions ?? [];
+  const navigation = portalCopy.navItems.filter((item) =>
+    item.anyPermission.some((permission) => permissions.includes(permission)),
+  );
+
   return (
     <main className="shell">
       <aside className="sidebar" aria-label={portalCopy.navigationLabel}>
@@ -24,7 +40,7 @@ export function BusinessShell({ active, eyebrow, title, statuses, children }: Bu
           </div>
         </div>
         <nav className="navList">
-          {portalCopy.navItems.map((item) => (
+          {navigation.map((item) => (
             <Link
               aria-current={active === item.key ? 'page' : undefined}
               className={active === item.key ? 'active' : undefined}
@@ -35,6 +51,28 @@ export function BusinessShell({ active, eyebrow, title, statuses, children }: Bu
             </Link>
           ))}
         </nav>
+
+        {session ? (
+          <div className="sidebarUser">
+            <div className="sidebarUserInfo">
+              <span className="sidebarUserAvatar">{session.sub.slice(-2).toUpperCase()}</span>
+              <div className="sidebarUserMeta">
+                <span className="sidebarUserPhone">{shortIdentifier(session.sub)}</span>
+                <span className="sidebarUserRole">{labelFromCode(session.role)}</span>
+              </div>
+            </div>
+            <form action={logoutAction}>
+              <button
+                aria-label="Sign out"
+                className="sidebarLogout"
+                title="Sign out"
+                type="submit"
+              >
+                →
+              </button>
+            </form>
+          </div>
+        ) : null}
       </aside>
 
       <section className="workspace">
@@ -56,4 +94,16 @@ export function BusinessShell({ active, eyebrow, title, statuses, children }: Bu
       </section>
     </main>
   );
+}
+
+function labelFromCode(value: string): string {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(' ');
+}
+
+function shortIdentifier(userId: string): string {
+  return userId.length > 12 ? `${userId.slice(0, 8)}…` : userId;
 }

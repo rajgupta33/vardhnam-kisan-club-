@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import type { Brand, CatalogueStatus, ProductQueueItem } from '@vardhnam/api-client';
 import { BusinessShell } from '../../components/business-shell';
+import { EmptyState } from '../../components/empty-state';
+import { Pagination } from '../../components/pagination';
+import { StatusBadge } from '../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../lib/format';
 import { loadBrandReviewQueue, loadProductReviewQueue } from '../../lib/marketplace-api';
 import { reviewBrandAction } from './actions';
@@ -20,25 +23,24 @@ const statusFilterValues: CatalogueStatus[] = [
   'REJECTED',
   'ARCHIVED',
 ];
+const limit = 25;
 
 export default async function CataloguePage({ searchParams }: CataloguePageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const status = parseStatus(readParam(resolvedSearchParams.status)) ?? 'SUBMITTED';
   const q = readParam(resolvedSearchParams.q);
-  const catalogueQuery = {
-    status,
-    page: 1,
-    limit: 25,
-    ...(q ? { q } : {}),
-  };
+  const brandPage = parsePage(readParam(resolvedSearchParams.brandPage));
+  const productPage = parsePage(readParam(resolvedSearchParams.productPage));
   const [brandResult, productResult] = await Promise.all([
-    loadBrandReviewQueue(catalogueQuery),
-    loadProductReviewQueue(catalogueQuery),
+    loadBrandReviewQueue({ status, page: brandPage, limit, ...(q ? { q } : {}) }),
+    loadProductReviewQueue({ status, page: productPage, limit, ...(q ? { q } : {}) }),
   ]);
   const notice = readParam(resolvedSearchParams.notice);
   const error = readParam(resolvedSearchParams.error);
   const brands = brandResult.ok ? brandResult.data.items : [];
+  const brandTotal = brandResult.ok ? brandResult.data.total : 0;
   const productItems = productResult.ok ? productResult.data.items : [];
+  const productTotal = productResult.ok ? productResult.data.total : 0;
   const readyProducts = productItems.filter((item) => item.missingRequirements.length === 0).length;
   const connectionError = !brandResult.ok
     ? brandResult.error
@@ -47,7 +49,7 @@ export default async function CataloguePage({ searchParams }: CataloguePageProps
       : undefined;
   const statuses = [
     {
-      label: brandResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: brandResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: brandResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -87,7 +89,7 @@ export default async function CataloguePage({ searchParams }: CataloguePageProps
           {statusFilterValues.map((statusValue) => (
             <FilterLink
               active={status === statusValue}
-              href={buildCatalogueHref(statusValue, q)}
+              href={buildCatalogueHref(statusValue, q, 1, 1)}
               key={statusValue}
               label={labelFromCode(statusValue)}
             />
@@ -103,10 +105,7 @@ export default async function CataloguePage({ searchParams }: CataloguePageProps
       </section>
 
       {connectionError ? (
-        <section className="emptyState">
-          <h3>Catalogue API Connection Blocked</h3>
-          <p className="mutedText">{connectionError}</p>
-        </section>
+        <EmptyState description={connectionError} title="Catalogue API Connection Blocked" />
       ) : (
         <>
           <section className="queueList" aria-label="Brand review queue">
@@ -117,13 +116,19 @@ export default async function CataloguePage({ searchParams }: CataloguePageProps
               </div>
             </div>
             {brands.length === 0 ? (
-              <article className="emptyState">
-                <h3>No brand records</h3>
-                <p className="mutedText">Submitted company brand records will appear here.</p>
-              </article>
+              <EmptyState
+                description="Submitted company brand records will appear here."
+                title="No brand records"
+              />
             ) : (
               brands.map((brand) => <BrandQueueCard brand={brand} key={brand.id} />)
             )}
+            <Pagination
+              buildHref={(targetPage) => buildCatalogueHref(status, q, targetPage, productPage)}
+              limit={limit}
+              page={brandPage}
+              total={brandTotal}
+            />
           </section>
 
           <section className="queueList" aria-label="Product review queue">
@@ -134,13 +139,19 @@ export default async function CataloguePage({ searchParams }: CataloguePageProps
               </div>
             </div>
             {productItems.length === 0 ? (
-              <article className="emptyState">
-                <h3>No product masters</h3>
-                <p className="mutedText">Submitted product master records will appear here.</p>
-              </article>
+              <EmptyState
+                description="Submitted product master records will appear here."
+                title="No product masters"
+              />
             ) : (
               productItems.map((item) => <ProductQueueCard item={item} key={item.product.id} />)
             )}
+            <Pagination
+              buildHref={(targetPage) => buildCatalogueHref(status, q, brandPage, targetPage)}
+              limit={limit}
+              page={productPage}
+              total={productTotal}
+            />
           </section>
         </>
       )}
@@ -157,9 +168,10 @@ function BrandQueueCard({ brand }: { brand: Brand }) {
             <p className="eyebrow">{brand.companyOrganisation?.displayName ?? 'Company'}</p>
             <h3>{brand.name}</h3>
           </div>
-          <span className={`statusBadge ${brand.status === 'APPROVED' ? 'ok' : 'warn'}`}>
-            {labelFromCode(brand.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(brand.status)}
+            tone={catalogueStatusTone(brand.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Slug" value={brand.slug} />
@@ -184,9 +196,10 @@ function ProductQueueCard({ item }: { item: ProductQueueItem }) {
             <p className="eyebrow">{item.product.brand.name}</p>
             <h3>{item.product.name}</h3>
           </div>
-          <span className={`statusBadge ${item.product.status === 'APPROVED' ? 'ok' : 'warn'}`}>
-            {labelFromCode(item.product.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(item.product.status)}
+            tone={catalogueStatusTone(item.product.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Company" value={item.product.companyOrganisation?.displayName} />
@@ -198,12 +211,14 @@ function ProductQueueCard({ item }: { item: ProductQueueItem }) {
         </dl>
         <div className="requirementList">
           {item.missingRequirements.length === 0 ? (
-            <span className="statusBadge ok">Ready</span>
+            <StatusBadge label="Ready" tone="ok" />
           ) : (
             item.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
+              <StatusBadge
+                key={requirement}
+                label={`Missing ${labelFromCode(requirement)}`}
+                tone="warn"
+              />
             ))
           )}
         </div>
@@ -269,13 +284,35 @@ function DetailField({ label, value }: { label: string; value: string | null | u
   );
 }
 
-function buildCatalogueHref(status: CatalogueStatus, q: string | undefined): string {
+function buildCatalogueHref(
+  status: CatalogueStatus,
+  q: string | undefined,
+  brandPage: number,
+  productPage: number,
+): string {
   const params = new URLSearchParams({ status });
   if (q) {
     params.set('q', q);
   }
+  if (brandPage > 1) {
+    params.set('brandPage', String(brandPage));
+  }
+  if (productPage > 1) {
+    params.set('productPage', String(productPage));
+  }
 
   return `/catalogue?${params.toString()}`;
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function catalogueStatusTone(status: CatalogueStatus): 'ok' | 'warn' | 'danger' {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED' || status === 'ARCHIVED') return 'danger';
+  return 'warn';
 }
 
 function readParam(value: string | string[] | undefined): string | undefined {

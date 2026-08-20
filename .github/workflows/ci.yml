@@ -1,4 +1,4 @@
-name: Phase 3D CI
+name: Vardhnam CI
 
 on:
   push:
@@ -16,11 +16,11 @@ jobs:
         env:
           POSTGRES_USER: vardhnam
           POSTGRES_PASSWORD: vardhnam_dev_password
-          POSTGRES_DB: vardhnam_agrotech
+          POSTGRES_DB: vardhnam_agrotech_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U vardhnam -d vardhnam_agrotech"
+          --health-cmd "pg_isready -U vardhnam -d vardhnam_agrotech_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -39,9 +39,13 @@ jobs:
       API_PREFIX: api/v1
       CORS_ORIGIN: http://localhost:3000
       LOG_LEVEL: error
+      # The integration suite sets AUTH_MODE per Jest project, so this value only
+      # affects any non-test process started by a step.
       AUTH_MODE: mock
-      DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech?schema=public
+      DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech_test?schema=public
+      TEST_DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech_test?schema=public
       REDIS_URL: redis://localhost:6379
+      QUEUE_PREFIX: vardhnam-ci
       SMS_PROVIDER: mock
       WHATSAPP_PROVIDER: mock
       EMAIL_PROVIDER: mock
@@ -84,14 +88,117 @@ jobs:
       - name: Build
         run: npm run build
 
-  flutter:
-    name: Flutter apps
+  docker:
+    name: API image
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        app:
-          - apps/farmer-mobile
-          - apps/partner-mobile
+    # A Dockerfile that is never built is a Dockerfile that stops working. This
+    # builds the runtime image and proves the container actually serves, rather
+    # than only proving it compiles.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vardhnam
+          POSTGRES_PASSWORD: vardhnam_dev_password
+          POSTGRES_DB: vardhnam_agrotech
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vardhnam -d vardhnam_agrotech"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # No registry has been chosen, so the image is built and loaded locally
+      # rather than pushed. Swap `load` for `push` once that decision is made.
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/marketplace-api/Dockerfile
+          target: runtime
+          tags: vardhnam-api:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build migrator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/marketplace-api/Dockerfile
+          target: migrator
+          tags: vardhnam-api-migrate:ci
+          load: true
+          cache-from: type=gha
+
+      - name: Apply migrations from the migrator image
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL='postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech?schema=public' \
+            vardhnam-api-migrate:ci
+
+      - name: Start the API container
+        run: |
+          docker run -d --name vardhnam-api-ci --network host --init \
+            -e NODE_ENV=production \
+            -e PORT=3001 \
+            -e API_PREFIX=api/v1 \
+            -e AUTH_MODE=production \
+            -e LOG_LEVEL=error \
+            -e JWT_ACCESS_SECRET=ci-only-jwt-secret-value-not-for-real-use \
+            -e DATABASE_URL='postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech?schema=public' \
+            -e REDIS_URL=redis://localhost:6379 \
+            vardhnam-api:ci
+
+      # Readiness, not liveness: it checks PostgreSQL, Redis and the queues, so a
+      # green response proves the container reached its dependencies rather than
+      # merely starting a process.
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:3001/api/v1/health/ready; then
+              echo "ready after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API container never became ready" >&2
+          docker logs vardhnam-api-ci >&2
+          exit 1
+
+      - name: Confirm graceful shutdown on SIGTERM
+        run: |
+          docker stop --timeout 15 vardhnam-api-ci
+          # A container killed by the timeout reports 137 (SIGKILL). The
+          # entrypoint installs a SIGTERM handler and calls app.close(), so a
+          # clean exit is the signal that graceful shutdown actually works.
+          code=$(docker inspect -f '{{.State.ExitCode}}' vardhnam-api-ci)
+          echo "exit code: ${code}"
+          test "${code}" != "137"
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs vardhnam-api-ci || true
+
+  farmer-flutter:
+    name: Farmer Flutter 3.44.9
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,16 +206,66 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: 3.44.9
           channel: stable
+          cache: true
 
-      - name: Install Flutter dependencies
-        working-directory: ${{ matrix.app }}
+      - name: Verify pinned Flutter toolchain
+        run: flutter --version
+
+      - name: Install farmer dependencies
+        working-directory: apps/farmer-mobile
         run: flutter pub get
 
-      - name: Analyze
-        working-directory: ${{ matrix.app }}
-        run: flutter analyze
+      - name: Generate farmer localizations
+        working-directory: apps/farmer-mobile
+        run: flutter gen-l10n
 
-      - name: Test
-        working-directory: ${{ matrix.app }}
+      - name: Check farmer formatting
+        working-directory: apps/farmer-mobile
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze farmer app
+        working-directory: apps/farmer-mobile
+        run: flutter analyze --fatal-infos
+
+      - name: Test farmer app
+        working-directory: apps/farmer-mobile
+        run: flutter test
+
+  partner-flutter:
+    name: Partner Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.9
+          channel: stable
+          cache: true
+
+      - name: Verify pinned Flutter toolchain
+        run: flutter --version
+
+      - name: Install partner dependencies
+        working-directory: apps/partner-mobile
+        run: flutter pub get
+
+      - name: Generate partner localizations
+        working-directory: apps/partner-mobile
+        run: flutter gen-l10n
+
+      - name: Check partner formatting
+        working-directory: apps/partner-mobile
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze partner app
+        working-directory: apps/partner-mobile
+        run: flutter analyze --fatal-infos
+
+      - name: Test partner app
+        working-directory: apps/partner-mobile
         run: flutter test

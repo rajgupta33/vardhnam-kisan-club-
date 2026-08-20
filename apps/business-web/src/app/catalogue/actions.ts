@@ -9,7 +9,7 @@ export async function reviewBrandAction(formData: FormData): Promise<void> {
   const brandId = requireFormValue(formData, 'brandId');
   const decision = requireFormValue(formData, 'decision') as CatalogueReviewDecision;
   const reason = optionalFormValue(formData, 'reason');
-  const { client, config } = createBusinessApiClient();
+  const { client, config } = await createBusinessApiClient();
 
   if (!client) {
     redirectWithCatalogueMessage('error', `Missing ${config.missingVariables.join(', ')}`);
@@ -37,7 +37,7 @@ export async function reviewProductAction(formData: FormData): Promise<void> {
   const productId = requireFormValue(formData, 'productId');
   const decision = requireFormValue(formData, 'decision') as CatalogueReviewDecision;
   const reason = optionalFormValue(formData, 'reason');
-  const { client, config } = createBusinessApiClient();
+  const { client, config } = await createBusinessApiClient();
 
   if (!client) {
     redirectWithProductMessage(productId, 'error', `Missing ${config.missingVariables.join(', ')}`);

@@ -1,3 +1,39 @@
+# Local stack.
+#
+# `docker compose up -d` deliberately starts ONLY PostgreSQL and Redis, which is
+# what the documented developer workflow expects: the API and worker are run from
+# the host with `npm run start:dev` so they reload on change.
+#
+# To run the containerised API and worker too -- which is what a deployment
+# actually ships -- use the `app` profile:
+#
+#   docker compose --profile app up -d --build
+#
+# Migrations are a separate one-shot service rather than a step in either
+# process's startup, because concurrent replicas would race on `migrate deploy`:
+#
+#   docker compose --profile migrate run --rm migrate
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: apps/marketplace-api/Dockerfile
+    target: runtime
+
+x-api-environment: &api-environment
+  NODE_ENV: production
+  # Inside the compose network these resolve to the service names, not localhost.
+  DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@postgres:5432/vardhnam_agrotech?schema=public
+  REDIS_URL: redis://redis:6379
+  # Development-only secret. A real deployment injects this from secret
+  # management; it is here so the local stack starts without extra setup.
+  JWT_ACCESS_SECRET: local-development-only-jwt-secret-not-for-real-use
+  AUTH_MODE: production
+  API_PREFIX: api/v1
+  CORS_ORIGIN: http://localhost:3000
+  PUBLIC_API_BASE_URL: http://localhost:3001
+  KISAN_CLUB_ENABLED: 'true'
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -31,6 +67,57 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # One-shot. Runs to completion and exits; nothing depends on it staying up.
+  migrate:
+    profiles: ['migrate']
+    build:
+      context: .
+      dockerfile: apps/marketplace-api/Dockerfile
+      target: migrator
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: *api-image
+    profiles: ['app']
+    container_name: vardhnam-api
+    restart: unless-stopped
+    # PID 1 gets no default signal handling, and both entrypoints install their
+    # own SIGTERM handler for graceful shutdown. `init` reaps zombies and
+    # forwards signals so that handler actually runs.
+    init: true
+    environment:
+      <<: *api-environment
+      PORT: '3001'
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *api-image
+    profiles: ['app']
+    container_name: vardhnam-worker
+    restart: unless-stopped
+    init: true
+    # Same image, different entrypoint: this process consumes queues and serves
+    # no HTTP, so it also has no healthcheck and no published port.
+    command: ['node', 'dist/src/worker.js']
+    environment: *api-environment
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

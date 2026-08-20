@@ -16,6 +16,7 @@ import {
 } from '@prisma/client';
 import type { AuditRecordInput } from '../audit/audit.service';
 import { AuditService } from '../audit/audit.service';
+import { withAuditActor, type AuditActor } from '../common/audit-actor';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import type { CurrentUser } from '../auth/current-user.interface';
@@ -45,7 +46,8 @@ export class FinanceService {
   async recordFarmerPayment(
     tx: PrismaTransactionClient,
     paymentIntent: PaymentIntent,
-    actor: CurrentUser,
+    /** Absent when the payment was settled from a gateway webhook. */
+    actor: CurrentUser | undefined,
     requestId?: string,
   ): Promise<void> {
     await tx.financialLedgerEntry.create({
@@ -57,6 +59,79 @@ export class FinanceService {
         reason: 'Mock payment confirmed',
       },
     });
+    const benefitedOrders = await tx.productOrder.findMany({
+      where: { checkoutId: paymentIntent.checkoutId, clubBenefitPaise: { gt: 0 } },
+      select: { id: true, sellerOrganisationId: true, clubBenefitPaise: true },
+    });
+    for (const order of benefitedOrders) {
+      await tx.financialLedgerEntry.create({
+        data: {
+          entryType: FinancialLedgerEntryType.CLUB_BENEFIT_SUBSIDY,
+          amountPaise: order.clubBenefitPaise,
+          organisationId: order.sellerOrganisationId,
+          productOrderId: order.id,
+          paymentIntentId: paymentIntent.id,
+          requestId: requestId ?? null,
+          reason: 'Kisan Club benefit funded against gross distributor goods value',
+        },
+      });
+    }
+  }
+
+  async reverseCommissionEntriesForOrder(
+    tx: PrismaTransactionClient,
+    productOrderId: string,
+    actor: CurrentUser,
+    reason: string,
+    requestId?: string,
+    refundId?: string,
+  ) {
+    const siblings = await tx.commissionEntry.findMany({
+      where: {
+        productOrderId,
+        status: { not: CommissionEntryStatus.REVERSED },
+      },
+    });
+    const reversed = [];
+    const reversedAt = new Date();
+    for (const sibling of siblings) {
+      const updated = await tx.commissionEntry.update({
+        where: { id: sibling.id },
+        data: {
+          status: CommissionEntryStatus.REVERSED,
+          reversedAt,
+          reversalReason: reason,
+        },
+      });
+      await tx.financialLedgerEntry.create({
+        data: {
+          entryType: FinancialLedgerEntryType.REFUND,
+          amountPaise: -sibling.amountPaise,
+          organisationId: sibling.sellerOrganisationId,
+          productOrderId: sibling.productOrderId,
+          commissionEntryId: sibling.id,
+          refundId: refundId ?? null,
+          requestId: requestId ?? null,
+          reason,
+        },
+      });
+      await this.auditService.record(
+        this.withActor(actor, {
+          action: 'COMMISSION_ENTRY_REVERSED',
+          resourceType: 'CommissionEntry',
+          resourceId: updated.id,
+          organisationId: updated.sellerOrganisationId,
+          previousValue: this.commissionEntryAuditValue(sibling),
+          newValue: this.commissionEntryAuditValue(updated),
+          requestId,
+          reason,
+        }),
+        tx,
+      );
+      reversed.push(updated);
+    }
+
+    return { reversedEntries: reversed };
   }
 
   async recordDeliveryCommission(
@@ -276,11 +351,7 @@ export class FinanceService {
     return { items, page, limit, total };
   }
 
-  async createCommissionRule(
-    dto: CreateCommissionRuleDto,
-    actor: CurrentUser,
-    requestId?: string,
-  ) {
+  async createCommissionRule(dto: CreateCommissionRuleDto, actor: CurrentUser, requestId?: string) {
     return this.prisma.$transaction(async (tx) => {
       const effectiveFrom = new Date();
       const sellerOrganisationId = dto.sellerOrganisationId ?? null;
@@ -345,7 +416,9 @@ export class FinanceService {
     return { items, page, limit, total };
   }
 
-  async finalizeEligibleCommissionEntries(actor: CurrentUser, requestId?: string) {
+  // Accepts a system actor so the scheduled finalisation job can run this
+  // without a human operator; see `common/audit-actor.ts`.
+  async finalizeEligibleCommissionEntries(actor: AuditActor, requestId?: string) {
     const now = new Date();
     const eligible = await this.prisma.commissionEntry.findMany({
       where: { status: CommissionEntryStatus.PROVISIONAL, eligibleAt: { lte: now } },
@@ -400,54 +473,9 @@ export class FinanceService {
       });
     }
 
-    const siblings = await this.prisma.commissionEntry.findMany({
-      where: {
-        productOrderId: entry.productOrderId,
-        status: { not: CommissionEntryStatus.REVERSED },
-      },
-    });
-
-    return this.prisma.$transaction(async (tx) => {
-      const reversed = [];
-      const reversedAt = new Date();
-      for (const sibling of siblings) {
-        const updated = await tx.commissionEntry.update({
-          where: { id: sibling.id },
-          data: {
-            status: CommissionEntryStatus.REVERSED,
-            reversedAt,
-            reversalReason: dto.reason,
-          },
-        });
-        await tx.financialLedgerEntry.create({
-          data: {
-            entryType: FinancialLedgerEntryType.REFUND,
-            amountPaise: -sibling.amountPaise,
-            organisationId: sibling.sellerOrganisationId,
-            productOrderId: sibling.productOrderId,
-            commissionEntryId: sibling.id,
-            requestId: requestId ?? null,
-            reason: dto.reason,
-          },
-        });
-        await this.auditService.record(
-          this.withActor(actor, {
-            action: 'COMMISSION_ENTRY_REVERSED',
-            resourceType: 'CommissionEntry',
-            resourceId: updated.id,
-            organisationId: updated.sellerOrganisationId,
-            previousValue: this.commissionEntryAuditValue(sibling),
-            newValue: this.commissionEntryAuditValue(updated),
-            requestId,
-            reason: dto.reason,
-          }),
-          tx,
-        );
-        reversed.push(updated);
-      }
-
-      return { reversedEntries: reversed };
-    });
+    return this.prisma.$transaction((tx) =>
+      this.reverseCommissionEntriesForOrder(tx, entry.productOrderId, actor, dto.reason, requestId),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -615,12 +643,7 @@ export class FinanceService {
     };
   }
 
-  private withActor(actor: CurrentUser, input: AuditRecordInput): AuditRecordInput {
-    return {
-      ...input,
-      actorUserId: actor.userId,
-      actorRole: actor.role,
-      organisationId: input.organisationId ?? actor.organisationId,
-    };
+  private withActor(actor: AuditActor, input: AuditRecordInput): AuditRecordInput {
+    return withAuditActor(actor, input);
   }
 }

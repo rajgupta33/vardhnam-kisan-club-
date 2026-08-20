@@ -3,7 +3,8 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Vardhnam Business Portal',
-  description: 'Phase 1C onboarding approval and audit portal for Vardhnam Agrotech.',
+  description:
+    'Managed agriculture marketplace portal for Vardhnam Agrotech — onboarding, catalogue, inventory, orders, finance and operations.',
 };
 
 export default function RootLayout({

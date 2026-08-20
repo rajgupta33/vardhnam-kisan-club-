@@ -1,893 +1,711 @@
 # Remaining Implementation Plan
 
-**Companion to `docs/HANDOVER.md`. Read that first.**
-**Date:** 2026-08-06
+**Edition:** 2026-08-17, revision 2 (supersedes the 2026-08-06 edition, archived at `docs/archive/REMAINING_IMPLEMENTATION_PLAN_2026-08-06.md`)
+**Companion to:** `docs/HANDOVER.md`, `AGENTS.md`, `docs/PRODUCT_REQUIREMENTS.md`
+**Basis:** a full re-audit of the working tree on 2026-08-17 — every claim below was checked against code, schema, tests or a command run, not against the previous plan.
 
-This document breaks everything that is left into **16 work packages (WP-01 … WP-16)**. Each work package states:
-
-- **Why** — the requirement it satisfies
-- **Depends on** — what must exist first
-- **Build** — concrete schema, endpoints, files and logic
-- **Acceptance criteria** — how you know it is done
-- **Tests** — what to write
-- **Estimate** — for one experienced developer
-
-Work packages inside a stage can be parallelised across people. Stages should be done in order.
-
-Before starting **any** work package, re-read `docs/HANDOVER.md` §11 — the Definition of Done applies to every single one.
+> **Delivered since revision 1:** both integration-suite defects in §1.6 are fixed and the suite is self-configuring; **WP-04 (background jobs)**, **WP-08 (file and document storage)** and **WP-06 (notification delivery)** are complete — see §5. The provider-neutral part of **WP-07 (payments and webhooks)** is also built; selecting and connecting a real merchant sandbox remains externally blocked. **WP-16 items 1 and 6** (containerisation, API hardening) and **most of WP-09r** (the dashboard home, payouts, notifications, Tally, organisations, users, disputes and `/admin/jobs` portal surfaces) landed 2026-08-19 — see §5.
+>
+> **Two things now block a pilot that code cannot fix:** a real SMS/WhatsApp BSP account and a payment merchant account (§9, decisions 1 and 2). WhatsApp template pre-registration in particular has weeks of external lead time.
+>
+> **The farmer app and Kisan Club are now testable on a device** — `docs/FARMER_APP_TESTING_GUIDE.md`. The demo seed previously created **no Club data at all**, so every Club screen rendered an empty state; it now seeds an active membership, assigned promoter, farm and crop cycle, a Vardhnam-owned Club product with stock, a benefit rule and an approved bilingual advisory. Advisory generation also became a scheduled job, closing the manual-trigger placeholder in ADR 0009.
 
 ---
 
-## Contents
+## 0. What changed in this edition, and why you should read it
 
-**Stage 1 — Stabilise**
-- [WP-01 — Repository hygiene, branching and CI](#wp-01--repository-hygiene-branching-and-ci)
-- [WP-02 — Verify and fix the Flutter apps](#wp-02--verify-and-fix-the-flutter-apps)
-- [WP-03 — Generated API client and documentation backfill](#wp-03--generated-api-client-and-documentation-backfill)
+The 2026-08-06 plan assumed a repository that was roughly 45–50% complete with Stage 3 and Stage 4 barely started. **That is no longer true.** Between 2026-08-07 and 2026-08-16 the project delivered the entire Kisan Club programme (KC-01…KC-12), the returns/refunds vertical slice, the delivery-partner workflow, promoter field operations, the farmer app end-to-end, the partner app end-to-end, portal login/finance/support/returns/Club surfaces, and full English/Hindi localisation for both mobile apps.
 
-**Stage 2 — Close MVP functional holes**
-- [WP-04 — Background jobs with BullMQ](#wp-04--background-jobs-with-bullmq)
-- [WP-05 — Returns, refunds and disputes](#wp-05--returns-refunds-and-disputes)
-- [WP-06 — Real notification providers](#wp-06--real-notification-providers)
-- [WP-07 — Sandbox payment provider and webhooks](#wp-07--sandbox-payment-provider-and-webhooks)
-- [WP-08 — File and document storage](#wp-08--file-and-document-storage)
+The consequence is that **the old stage ordering is now wrong**. The old plan said "Stage 2 (MVP holes) → Stage 3 (portal + farmer app) → Stage 4 (partner app)". In reality Stages 3 and 4 are mostly finished while Stage 2 has barely been touched. Following the old order would mean re-planning work that is already done while leaving the actual blockers untouched.
 
-**Stage 3 — Portal and farmer app**
-- [WP-09 — Business portal: remaining surfaces](#wp-09--business-portal-remaining-surfaces)
-- [WP-10 — Farmer mobile app completion](#wp-10--farmer-mobile-app-completion)
-- [WP-11 — Internationalisation (English + Hindi)](#wp-11--internationalisation-english--hindi)
+This edition therefore:
 
-**Stage 4 — Partner app and services**
-- [WP-12 — Partner app shell and delivery-partner workflow](#wp-12--partner-app-shell-and-delivery-partner-workflow)
-- [WP-13 — Promoter field operations](#wp-13--promoter-field-operations)
-- [WP-14 — Service marketplace](#wp-14--service-marketplace)
+1. Records the **verified** state with the evidence for each claim (§1).
+2. Re-scores every work package as **DONE / PARTIAL / OPEN**, with what specifically remains (§2).
+3. Lists what genuinely has **zero code** behind it (§3).
+4. **Re-sequences** the remaining work around the real critical path to pilot (§4–§6).
+5. Adds two work packages the old plan did not have: **WP-17 (farmer app UI blueprint)** and **WP-18 (technical debt)** (§5).
 
-**Stage 5 — Production readiness**
-- [WP-15 — GST, invoice PDFs and the allocation engine](#wp-15--gst-invoice-pdfs-and-the-allocation-engine)
-- [WP-16 — Infrastructure, observability and go-live](#wp-16--infrastructure-observability-and-go-live)
-
----
----
-
-# STAGE 1 — STABILISE
-
-Goal: make the repository honest and workable before adding features. Nothing here is glamorous; all of it prevents weeks of pain later.
+Everything in §4–§5 that is unchanged from the previous edition has been carried over verbatim, so this document remains self-contained — you do not need the archived copy.
 
 ---
 
-## WP-01 — Repository hygiene, branching and CI
+## 1. Verified current state (2026-08-17)
 
-**Why:** The repo is one commit on `master` with stray log files, root-level binaries and no PR workflow. Mobile apps are not in CI at all.
-**Depends on:** nothing.
-**Estimate:** 2–3 days.
+### 1.1 Health checks actually run
 
-### Build
+| Check                            | Command                                                          | Result                                                                                                                 |
+| -------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Type-check, all workspaces       | `npm run typecheck`                                              | **PASS** (exit 0)                                                                                                      |
+| Lint, all workspaces             | `npm run lint`                                                   | **PASS** (exit 0)                                                                                                      |
+| API unit tests                   | `npm --workspace @vardhnam/marketplace-api run test`             | **PASS** — 46 suites, 249 tests (38/184 before WP-04)                                                                  |
+| Portal tests                     | `npm --workspace @vardhnam/business-web run test`                | **PASS** — 1 suite, 10 tests                                                                                           |
+| Farmer app static analysis       | `flutter analyze`                                                | **PASS** — "No issues found!"                                                                                          |
+| Farmer app tests                 | `flutter test`                                                   | **PASS** — 165 tests, including 32 golden comparisons                                                                  |
+| Partner app static analysis      | `flutter analyze`                                                | **PASS** — clean                                                                                                       |
+| Partner app tests                | `flutter test`                                                   | **PASS** — 34 tests                                                                                                    |
+| Migrations against test DB       | `prisma migrate deploy`                                          | **PASS** — all 53 migrations applied                                                                                   |
+| Production build, all workspaces | `npm run build`                                                  | **PASS** (exit 0 — API `nest build`, portal Next.js build, all four packages)                                          |
+| API integration suite            | `npm --workspace @vardhnam/marketplace-api run test:integration` | **PASS — 34 suites, 133 tests, exit 0.** See §1.6 for the two defects that were blocking it before 2026-08-17.         |
+| Compiled local runtime smoke     | API + worker + OTP-authenticated farmer routes                   | **PASS** — health, profile, farms, Club membership, marketplace, cart, orders and notifications all returned HTTP 200. |
 
-1. **Clean the tree.**
-   - Delete `business-web.dev.err.log`, `business-web.dev.out.log`, `business-web.phase1b.err.log`, `business-web.phase1b.out.log`.
-   - Add `*.log` to `.gitignore`.
-   - Move `Vardhnam_Agrotech_Codex_Development_Blueprint.docx` and `progress till date.pdf` into `docs/reference/` (or out of the repo into shared drive — they are large binaries).
-   - Confirm `.env` is gitignored and **rotate `JWT_ACCESS_SECRET`** and every other secret. Generate per-environment secrets; never reuse the `.env.example` placeholder.
+The codebase is in genuinely good technical health. **Zero `TODO`/`FIXME`/`HACK` markers and zero `: any` annotations** exist across `apps/marketplace-api/src`, `apps/business-web/src`, `apps/farmer-mobile/lib` and `apps/partner-mobile/lib`. That is unusual and worth protecting.
 
-2. **Branching model.** Create `main` from `master`, make it the default, protect it: require PR, require CI green, no direct pushes. Feature branches named `feat/wp-05-returns`, `fix/...`, `chore/...`. Squash-merge with a conventional commit title.
+### 1.2 Scale
 
-3. **Extend CI** (`.github/workflows/ci.yml`):
-   - Existing Node job: keep `lint`, `typecheck`, `test`, `build`.
-   - Add a **service container** job for Postgres + Redis that runs `prisma migrate deploy` then `npm --workspace @vardhnam/marketplace-api run test:integration`. Integration tests are currently never run by CI — this is the highest-value CI change available.
-   - Add a **Flutter job**: `flutter pub get`, `flutter analyze`, `flutter test` for both `apps/farmer-mobile` and `apps/partner-mobile`.
-   - Add `npm run format` (Prettier check).
+| Component                       | Size                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| Backend (`marketplace-api/src`) | ~34,700 lines, 41 controllers, **263 HTTP endpoints**, 32 Nest modules                |
+| Prisma schema                   | **80 models, 80 enums, 217 explicit indexes, 53 migrations**                          |
+| Permissions                     | **149 distinct permission codes**                                                     |
+| Business portal                 | 33 routes, ~8,200 lines of page code                                                  |
+| Farmer app                      | 85 Dart files, ~25,900 lines, 639 localisation keys × 2 locales                       |
+| Partner app                     | 55 Dart files, ~12,600 lines, 336 localisation keys × 2 locales                       |
+| Test suites                     | 44 API unit suites + 34 API integration suites + 31 farmer test files + partner tests |
 
-4. **Pre-commit hook** (optional but recommended): lint-staged running Prettier + ESLint on changed files.
+### 1.3 Environment (correcting an earlier blocker)
 
-5. **Environment matrix.** Document and create `.env` templates for `local`, `staging`, `production` in `docs/` (values redacted), listing which of the mock provider flags flip in each.
+**Flutter is now installed and working** (`/d/development/flutter/bin/flutter`, pinned to 3.44.9 in CI). Both apps analyse clean and pass their test suites locally. Docker is running with healthy `vardhnam-postgres` and `vardhnam-redis` containers, and both `vardhnam_agrotech` and `vardhnam_agrotech_test` databases exist. The environment blockers recorded in earlier documents are resolved.
 
-### Acceptance criteria
-- `main` is protected; a PR with a failing test cannot merge.
-- CI runs unit **and** integration tests, plus Flutter analyze/test.
-- `git status` is clean on a fresh clone after `npm install`.
-- No secret material in the repository history going forward (if a real secret was ever committed, rotate it — do not rely on deleting the file).
+### 1.4 Localisation is further along than any document claims
 
----
+Both ARB catalogues are **100% complete**: the farmer app has 639 keys in `app_en.arb` and 639 in `app_hi.arb` with **zero missing keys and only 2 intentionally identical values** (the language names themselves). The partner app has 336/336. Runtime locale switching, device-locale fallback and persistence are implemented in both apps.
 
-## WP-02 — Verify and fix the Flutter apps
+**Only the business portal remains English-only** (`src/content/portal-copy.ts`).
 
-**Why:** The Flutter SDK was never installed in the environment where the backend was built. **Neither mobile app has ever been compiled or run.** Everything about them is unverified.
-**Depends on:** WP-01 (CI job to keep them honest).
-**Estimate:** 3–5 days, could be more if the skeletons have drifted.
+### 1.5 The single biggest risk right now is not code
 
-### Build
+`git status` shows **355 modified or untracked files across only 2 commits**, all on `master`. Roughly three weeks of work — the entire Kisan Club programme, returns/refunds, the delivery workflow, both completed mobile apps — exists **only in the working tree of one machine**. There is no branch, no PR, no remote, no backup.
 
-1. Install the Flutter SDK. Pin a version in each `pubspec.yaml` (`environment.sdk` / `flutter`) and record it in `README.md`.
-2. For **each** of `apps/farmer-mobile` and `apps/partner-mobile`:
-   ```bash
-   flutter pub get
-   ```
-   ```bash
-   flutter analyze
-   ```
-   ```bash
-   flutter test
-   ```
-   ```bash
-   flutter run
-   ```
-   Fix everything that fails. Expect: missing/incompatible dependency versions, null-safety issues, `widget_test.dart` referencing a widget that changed, and lint failures.
-3. Point the farmer app at the local API. `lib/src/marketplace/marketplace_api.dart` needs a configurable base URL — use `--dart-define=API_BASE_URL=http://10.0.2.2:3001` (Android emulator loopback) rather than a hardcoded host. Add a `--dart-define` documentation block to `README.md`.
-4. Run `npm run seed:demo`, start the API, and confirm on a device/emulator that the product browse screen shows the demo product for pincode `302001`. This is the first real end-to-end proof the mobile layer works.
-5. Add a `flutter analyze --fatal-infos` gate and fix the resulting warnings.
-6. Establish the app architecture **now**, before more screens are written. Recommended and consistent with what already exists: `riverpod` (or `provider`) for state, `go_router` for navigation, `dio` for HTTP with an auth interceptor, `flutter_secure_storage` for tokens, `intl` + ARB for strings (see WP-11). Record the choice in `docs/DECISIONS/0003-flutter-app-architecture.md` — `AGENTS.md` requires an ADR for architectural decisions.
+A disk failure or a bad `git checkout` right now destroys the majority of the project's value. **Committing this work is the most urgent action in this document and should happen before anything else in this plan is started.**
 
-### Acceptance criteria
-- Both apps build and run on Android and iOS simulators.
-- `flutter analyze` is clean; `flutter test` passes; both run in CI.
-- Farmer app lists real demo products from the local API on a physical/emulated device.
-- ADR written for the chosen state/navigation/HTTP stack.
+### 1.6 Two integration-suite defects — FIXED 2026-08-17
 
----
+**Both are resolved.** The suite is now self-configuring: `npm run test:integration` needs only `TEST_DATABASE_URL`, and sets `AUTH_MODE` itself. The original diagnosis is kept below because the second defect describes a trap that will recur.
 
-## WP-03 — Generated API client and documentation backfill
+- **Defect 1 fixed** by splitting the suite into two configs — `jest.integration.config.cjs` (mock auth, everything else) and `jest.integration.auth.config.cjs` (production auth, the one spec) — each with its own `setupFiles` entry (`test/integration/env/mock-auth.ts` / `production-auth.ts`) that sets `AUTH_MODE` before the spec module is evaluated, early enough for `ConfigModule.forRoot()`. `npm run test:integration` chains both sequentially.
 
-**Why:** Request/response types are duplicated in three places (`packages/api-client`, `business-web/src/lib/marketplace-api.ts`, `farmer-mobile/lib/src/marketplace/marketplace_api.dart`) and the shared client has already drifted. `AGENTS.md` §5 requires generated or maintained OpenAPI clients. `docs/API_CONTRACTS.md` stops at Phase 4E.
-**Depends on:** WP-01.
-**Estimate:** 4–6 days.
+  > **This was first attempted with Jest `projects` and that does not work here.** Projects share a run but execute **concurrently**, and both groups call `resetIntegrationDatabase()`, so they truncate each other's fixtures mid-test. The symptom is ugly and misleading: specs that pass in isolation fail in the suite with unrelated-looking errors (foreign-key violations in permission seeding, random 401s). Root-level `maxWorkers: 1` does **not** serialise across projects. Keep the two invocations sequential.
 
-### Build
+- **Defect 2 fixed** by `test/integration/helpers/seed-reference-data.ts`, called from `resetIntegrationDatabase()` as the counterpart of the truncation. `setup.ts` now also fails fast with an actionable message when no test database is configured, and CI sets `TEST_DATABASE_URL` explicitly.
 
-1. **Emit the OpenAPI spec to a file.** The API already builds a Swagger document in `main.ts`. Add a script that writes `openapi.json` to disk without starting the server:
-   ```
-   npm --workspace @vardhnam/marketplace-api run openapi:generate
-   ```
-   Commit the generated `openapi.json` so drift is visible in PR diffs, and add a CI step that regenerates it and fails if it differs from the committed copy.
+> **Standing trap:** reference data seeded by a migration `INSERT` is invisible to the test harness, because the reset truncates it and Prisma will never re-run an applied migration. **If you add reference data in a migration, add it to `seed-reference-data.ts` in the same change.**
 
-2. **Audit the Swagger decorators first.** Newer modules (`finance`, `payouts`, `promoters`, `support`, `tally`, `notifications`, `dashboards`) must have `@ApiTags`, `@ApiOperation`, `@ApiResponse` and typed response DTOs. Generation is only as good as the decorators. Budget most of this WP here.
+#### Original diagnosis (2026-08-17, before the fix)
 
-3. **Generate the TypeScript client** into `packages/api-client` using `openapi-typescript` + a thin fetch wrapper, or `orval`. Keep the existing hand-written `ApiClientError` and envelope helpers; replace the hand-written type unions with generated ones. Delete the drifted manual types.
+Run correctly (`TEST_DATABASE_URL` pointed at `vardhnam_agrotech_test`, `AUTH_MODE=mock`), the suite reports **28 of 30 suites and 96 of 97 tests passing in 329s**. The two failures are genuine and both will also fail in CI — they have simply never been observed, because the repository has never been pushed and CI has therefore never run against this code.
 
-4. **Migrate `business-web`** to consume `@vardhnam/api-client` instead of its own type definitions. `marketplace-api.ts` keeps the server-side auth-header injection but uses generated types.
+**Defect 1 — the integration suite cannot pass in a single run, under any setting.**
+`test/integration/phase1d-authentication.spec.ts` throws at import time unless `AUTH_MODE=production`:
 
-5. **Generate the Dart client** with `openapi-generator` (`dart-dio` generator) into `apps/farmer-mobile/lib/src/api/generated/`, or — if the generated Dart is unwieldy — hand-maintain but generate the **models** only. Record whichever choice you make in an ADR.
+> `phase1d-authentication.spec.ts must be run with AUTH_MODE=production set in the shell environment before Jest starts`
 
-6. **Backfill `docs/API_CONTRACTS.md`** with the sections that are missing entirely: Authentication (`/auth/*`), Finance (`/finance/*`), Payouts (`/payouts/*`), Promoter attribution (`/promoters/*`), Support (`/support/*`), Tally (`/tally/*`), Notifications (`/notifications/*`), Dashboards (`/dashboards/*`). Match the existing format in that file exactly.
+Every other spec authenticates with mock headers and requires `AUTH_MODE=mock`. CI sets `AUTH_MODE: mock` job-wide (`.github/workflows/ci.yml:42`), so **the auth spec fails in CI and the other 29 fail if you flip it.** Fix by making the auth spec self-configuring — run it as a separate Jest project or a separate CI step with its own env — so one command can go green.
 
-7. Update `docs/DATA_MODEL.md` for every model added since Phase 4 (commission, ledger, settlement, attribution, payout account, support ticket, Tally sync, notification).
+**Defect 2 — migration-seeded reference data is destroyed by the test reset and never restored.**
+`test/integration/farm-registry.spec.ts` fails on `expect(wheat).toMatchObject({ nameEn: 'Wheat', nameHi: 'गेहूँ', isActive: true })` with "Received has value: undefined". The crop vocabulary is inserted by `prisma/migrations/20260811210000_add_farm_crop_registry/migration.sql`, but `resetIntegrationDatabase()` truncates **every** table except `_prisma_migrations`. Because the migration is already recorded as applied, the rows are never re-inserted — so the spec fails on every run after the first reset, including the first CI run.
 
-### Acceptance criteria
-- `openapi.json` is committed and CI fails on drift.
-- `packages/api-client` types are generated, not hand-written, and include every current endpoint.
-- `business-web` compiles against the generated client with zero local type duplication.
-- `API_CONTRACTS.md` documents 100% of live endpoints.
+The fix follows a pattern the repo already has: `test/integration/helpers/seed-permissions.ts` re-seeds permissions after truncation. Add an equivalent crop-vocabulary seeder (or exclude reference tables from the truncation list). **More generally: any reference data seeded by a migration is invisible to the test harness. Audit the other migrations for the same pattern before adding more.**
 
----
----
-
-# STAGE 2 — CLOSE MVP FUNCTIONAL HOLES
+Neither defect indicates a problem with the product code — the business logic they cover is fine. They are test-infrastructure faults, and they matter because they will block the first green CI run the moment WP-01r pushes the repository.
 
 ---
 
-## WP-04 — Background jobs with BullMQ
+## 2. Work package status re-scored against the code
 
-**Why:** `AGENTS.md` §5 and `PRODUCT_REQUIREMENTS.md` §24 require background jobs with retry and dead-letter handling. `bullmq` is installed but **completely unused**. Every subsequent work package (notifications, webhooks, Tally sync, commission finalisation, expiry sweeps) needs this. Build it before them.
-**Depends on:** WP-01.
-**Estimate:** 5–7 days.
-
-### Build
-
-1. **`src/jobs/` module.**
-   - `jobs.module.ts` registering BullMQ with the existing `RedisModule` connection.
-   - `queue-names.ts` — a const enum of queue names. Start with: `notifications`, `payment-webhooks`, `tally-sync`, `scheduled-maintenance`.
-   - A base `JobProcessor` pattern with structured logging that propagates the originating `requestId`/correlation ID into the job payload and logs it on every attempt.
-
-2. **Retry and dead-letter policy.** Exponential backoff, capped attempts (start with 5), `removeOnComplete` with a retention window, and a **dead-letter queue** per queue. Failed-after-max jobs move to DLQ with the full error and payload retained.
-
-3. **Operational visibility.** An admin-only endpoint set under `/admin/jobs`:
-   - `GET /admin/jobs/queues` — depth, active, failed, delayed counts per queue.
-   - `GET /admin/jobs/dead-letter` — paginated DLQ entries.
-   - `POST /admin/jobs/dead-letter/:id/retry` — requeue, audited.
-   Guard with a new `JOBS_READ` / `JOBS_MANAGE` permission for `ADMIN`/`SUPER_ADMIN` only.
-
-4. **Scheduled (repeatable) jobs.** Register these on boot:
-   | Job | Schedule | What it does |
-   |---|---|---|
-   | `finalize-eligible-commissions` | daily | Calls the existing `financeService.finalizeEligibleCommissionEntries` logic — today this only runs if someone POSTs to the endpoint manually. |
-   | `expire-batches` | daily | Marks `InventoryBatch` rows past expiry as `EXPIRED` so they drop out of derived availability. |
-   | `expire-otp-challenges` | hourly | Cleans up spent/expired `OtpChallenge` rows. |
-   | `prune-refresh-tokens` | daily | Removes revoked/expired `RefreshToken` rows. |
-   | `support-sla-breach-sweep` | hourly | Flags tickets past `SUPPORT_TICKET_DEFAULT_SLA_HOURS` and (after WP-06) notifies. |
-
-5. **Worker process.** Add `npm run start:worker` running the same Nest app in worker-only mode (queues consumed, HTTP not served) so API and workers can scale independently per `PRODUCT_REQUIREMENTS.md` §24. Document running both locally.
-
-6. **Health.** Extend `/health/ready` to report Redis and queue connectivity.
-
-### Acceptance criteria
-- A job can be enqueued, processed, retried with backoff, and lands in the DLQ after max attempts.
-- DLQ retry works and writes an audit record.
-- All five scheduled jobs run on schedule and are idempotent (running twice does no damage).
-- Worker runs as a separate process; API still works with the worker stopped (jobs simply queue up).
-- Integration test: `test/integration/jobs.spec.ts` covering enqueue → process → fail → DLQ → retry.
+| WP        | Title                         | Old status | **Verified status**                                     | What actually remains                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------- | ----------------------------- | ---------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| WP-01     | Repo hygiene, branching, CI   | OPEN       | **PARTIAL**                                             | The CI _definition_ is excellent (Node + both Flutter jobs, integration tests, format check) — but it has **never run**, because the repo has never been pushed, and it would fail today on the two §1.6 defects. The repository itself: 355 uncommitted files, no `main`, no branch protection, tracked `.docx`/`.pdf` binaries at root, stale `.log` files, dead `role-dashboard.tsx`, `.env` missing `TEST_DATABASE_URL` and carrying the wrong `AUTH_MODE` for tests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| WP-02     | Verify and fix Flutter apps   | OPEN       | **DONE**                                                | Both apps analyse clean, pass tests, are pinned to Flutter 3.44.9 and gated in CI. Only real-device/iOS verification remains (environment gate, not code).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| WP-03     | Generated API client + docs   | OPEN       | **PARTIAL**                                             | `API_CONTRACTS.md` is largely backfilled (auth, finance, support, notifications, returns, refunds, farms, promoters, payouts, all Kisan Club). Missing: `/tally`, `/dashboards`, `/promoter-visits`. `packages/api-client` is still **hand-written and drifted** (its `OrganisationType` still lacks `DELIVERY_PARTNER`) and **consumed by nothing** — all three clients maintain their own types.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| WP-04     | Background jobs (BullMQ)      | OPEN       | **DONE (2026-08-17)**                                   | Delivered: `src/jobs/` module, five declared queues, dead-letter queues with audited operator replay, `/admin/jobs` behind new `jobs:read`/`jobs:manage` permissions, four repeatable maintenance jobs, a separate worker entrypoint, and `/health/ready` queue reporting. Two of the six originally-specified scheduled jobs were deliberately not built — see §5 WP-04.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| WP-05     | Returns, refunds, disputes    | OPEN       | **PARTIAL (~96%)**                                      | Returns, scan-gated evidence, inspection, pickup, asynchronous retry-safe mock refunds, commission reversal, and the complete audited product-dispute lifecycle with finance-owned adjustment awards are **built and integration-tested**. Remaining: a real refund provider and signed refund-status webhooks (needs WP-07); the dispute portal UI remains in WP-09r.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| WP-06     | Real notification providers   | PARTIAL    | **DONE (2026-08-18)**, minus real BSP accounts          | Delivered: per-channel provider abstraction, delivery worker on the `notifications` queue with retry/DLQ, a dispatch sweep that needs no producer changes, per-channel templates with language-aware SMS segment limits, recipient preferences with transactional categories protected, and OTPs routed through the SMS transport. **Every provider is still `mock`** — that is a business decision (§9, decision 2), not missing code. See §5 WP-06.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| WP-07     | Sandbox payment provider      | OPEN       | **PARTIAL (~70%)**                                      | Delivered: provider interface/registry, raw-body HMAC verification, durable deduplicated `WebhookEvent`, asynchronous settlement on `payment-webhooks`, exact paise validation, finance ledger integration, scheduled reconciliation/reporting and provider-routed refund execution. Remaining: the business-selected real sandbox implementation and asynchronous real-refund webhook lifecycle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| WP-08     | File and document storage     | OPEN       | **DONE (2026-08-17)**                                   | Delivered: `StoredFile` model and migration, `StorageProvider` abstraction with a fully working local provider that mimics presigned-URL semantics, per-purpose upload policy validated twice, scan-gated availability on the WP-04 `documents` queue, audited permission-checked downloads. A cloud provider is the one deliberate gap — it needs the hosting decision. See §5 WP-08.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| WP-09     | Business portal surfaces      | PARTIAL    | **PARTIAL (~98%), most of WP-09r delivered 2026-08-19** | Delivered: authenticated role-scoped operations across onboarding, catalogue, inventory, offers, fulfilment, returns/refunds, finance, support, audit, Kisan Club, payouts, notifications, Tally, organisations, users, disputes and jobs. Order invoice and successful-refund credit-note PDF downloads are wired. Orders, Returns, Disputes and Notifications have contextual route-scoped loading/error recovery. The Onboarding, Orders, Returns, Offers, Catalogue, Inventory, Inventory Ageing, Advisory, Kisan Club Members, Kisan Club Fulfilment, Kisan Club Intelligence, Audit, Support, Finance Ledger, Finance Settlements and Finance Commissions queues now use shared empty/status/pagination components where applicable; Kisan Club Network and Commercial use shared empty/status states while pagination remains contract-blocked. Onboarding, Catalogue, Offer and Warehouse detail histories plus Warehouse batches/movements, Offer linked inventory, Catalogue variants, User and Organisation memberships, Order items/history, Return items/inspection/history, Dispute timeline, Club intelligence aggregates/promoters, Admin queue/schedule/dead-letter data, Audit, Support, Ledger, Commissions, Settlement commission entries, Tally reconciliation/attempts and both Inventory tables use the shared data table. Filters and related-dataset positions persist in URL-driven backend pagination. Catalogue, organisation, KYC, offer, advisory, order-fulfilment, return/refund, dispute, Club membership/coordination/territory/promoter/programme/benefit, support-ticket, Tally sync-attempt and commission lifecycle decisions require confirmation. Organisation membership creation and updates now expose controls under their distinct permissions. Order, Return, Dispute, Club membership/fulfilment, Support ticket and Tally detail also use shared API-error and status presentation. Dispute awards are entered and validated as whole paise, with backend resolution and ledger validation remaining authoritative. The Audit view renders null actors as `System`; finance amounts remain backend-provided paise integers. **Open:** remaining shared-component retrofits plus dedicated complete territory- and programme-options APIs before the Kisan Club Network and Commercial lists can be safely paginated without hiding valid form choices. See §5. |
+| WP-10     | Farmer mobile app             | OPEN       | **PARTIAL (~89%)**                                      | Auth/OTP registration, profile, addresses, discovery with filters and offline cache, cart, checkout, mock payments, orders + timeline + invoice PDF, cancellation, returns/refunds + credit-note PDF, support, notifications, farms/crops, and the full Kisan Club module are built. **Open:** push registration, product reviews, real SMS and device verification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| WP-11     | Internationalisation          | OPEN       | **PARTIAL (~70%)**                                      | Both mobile apps are 100% bilingual with runtime switching and persistence. **Only the portal is English-only.** The CI guard for missing translation keys is also not implemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| WP-12     | Partner shell + delivery      | PARTIAL    | **PARTIAL (~80%)**                                      | Shell, OTP auth, role routing, availability, assignment inbox, accept/reject, QR pickup verification, navigation/calling, OTP completion, geotag proof, failure/retry, return pickup, earnings and payout accounts are all built. **Open:** shared KYC submission (WP-08), photo proof (WP-08), push registration, COD ledger (confirm pilot scope first).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| WP-13     | Promoter field operations     | PARTIAL    | **PARTIAL (~65%)**                                      | Leads pipeline, OTP-verified farmer conversion, territory assignment, farm/crop surveys and append-only visit logging with permission-aware location are built and audited. **Open:** visit evidence (WP-08), consented attendance, daily targets, training material library, assisted-ordering polish.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| WP-14     | Service marketplace           | OPEN       | **OPEN — zero code**                                    | `SERVICE_PROVIDER` and `SERVICE_ORDER` remain enum values with nothing behind them. No profile, listing, availability, booking or review model exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| WP-15     | GST, invoice PDFs, allocation | OPEN       | **PARTIAL — WP-15A/15B ENGINEERING DELIVERED**          | Variant HSN/rate metadata, checkout snapshots, verified seller/state and place-of-supply inputs, tax-inclusive line calculations, reconciliation constraints, seller/FY invoice and credit-note sequences, private queued PDFs and audited farmer/portal downloads are implemented. **Open:** CA approval and deferred allocation work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| WP-16     | Infrastructure and go-live    | OPEN       | **PARTIAL (~30%)**                                      | **API hardening and containerisation delivered 2026-08-19.** `helmet`, a global rate limit, an explicit body ceiling and single-owner graceful shutdown are in and covered by `test/integration/api-hardening.spec.ts`; a multi-stage Dockerfile builds the API, worker and a separate migrator image, wired into `docker-compose.yml` profiles and a CI job that runs the container and asserts readiness plus a clean SIGTERM exit. **Open:** image registry, orchestration manifests, secrets management, TLS/ingress, observability and a shared rate-limit store — every one gated on the hosting decision.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **WP-17** | **Farmer app UI blueprint**   | _(new)_    | **PARTIAL (~97%)**                                      | Design foundation, the persistent five-tab shell, personalised Home, Kisan Club, farm/crop surfaces, advisory/Crop Doctor shell, marketplace refresh, order/notification/account alignment and built-in golden coverage for all seven blueprint key screens are done (2026-08-18) — see §5. Real logo and real product pack shots are in. **Open:** approved Club terms/privacy destination, a future provider-backed Crop Doctor result flow, weather integration, golden state-matrix expansion and the rest of the asset library.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **WP-18** | **Technical debt**            | _(new)_    | **OPEN**                                                | `checkout.service.ts` is a 4,080-line, 26-method god service. `packages/api-client` and `packages/design-tokens` are declared dependencies that nothing imports. Portal has 2 components for 8,200 lines of pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
 
-## WP-05 — Returns, refunds and disputes
+## 3. What genuinely has zero code behind it
 
-**Why:** `PRODUCT_REQUIREMENTS.md` §18 and §25 (MVP scope includes "return request"). The `ProductOrderStatus` enum already declares nine return/refund/dispute statuses that **no code can currently produce**. This is the largest functional gap in the product.
-**Depends on:** WP-04 (for async refund processing). Refund *execution* against a real provider needs WP-07, but model the refund now and let the mock provider handle it, exactly as payments were built.
-**Estimate:** 3–4 weeks. This is the biggest backend package left.
+Verified by exhaustive grep across `apps/*/src`, `apps/*/lib` and `packages/*`. These are the true greenfield items:
 
-### Business rules that must hold (from `AGENTS.md` §2 and `PRODUCT_REQUIREMENTS.md` §18)
-- Returns and refunds must be fully auditable.
-- **Returned goods must never automatically re-enter sellable inventory.** They go to a quarantined state and only an explicit, audited inspection decision can restock them.
-- Refunds and commission reversals must be represented as **financial ledger entries** — never by mutating an existing entry.
-- The distributor is the seller of record, so the return is against the distributor's child order, not the parent checkout.
-- Commission that was already finalised must be reversed through `financeService.reverseCommissionEntry` (this already exists — reuse it).
-
-### Build
-
-**1. Schema** — new migration `2026xxxx_add_returns_refunds_disputes`.
-
-```prisma
-enum ReturnRequestStatus {
-  REQUESTED
-  APPROVED
-  REJECTED
-  IN_TRANSIT
-  RECEIVED
-  INSPECTED
-  COMPLETED
-  CANCELLED
-}
-
-enum ReturnReasonCode {
-  DAMAGED_IN_TRANSIT
-  WRONG_ITEM
-  EXPIRED_OR_NEAR_EXPIRY
-  QUALITY_ISSUE
-  NOT_AS_DESCRIBED
-  ORDERED_BY_MISTAKE
-  OTHER
-}
-
-enum ReturnInspectionOutcome {
-  RESTOCKABLE
-  DAMAGED_WRITE_OFF
-  QUARANTINED
-  REJECTED_RETURN
-}
-
-enum RefundStatus {
-  PENDING
-  PROCESSING
-  SUCCEEDED
-  FAILED
-  CANCELLED
-}
-
-enum RefundMethod {
-  ORIGINAL_PAYMENT_METHOD
-  MANUAL_BANK_TRANSFER
-  ADJUSTMENT
-}
-
-enum DisputeStatus {
-  OPEN
-  UNDER_REVIEW
-  AWAITING_FARMER
-  AWAITING_DISTRIBUTOR
-  RESOLVED_FOR_FARMER
-  RESOLVED_FOR_DISTRIBUTOR
-  RESOLVED_SPLIT
-  CLOSED
-}
-
-model ReturnRequest {
-  id                  String   @id @default(uuid())
-  productOrderId      String
-  farmerUserId        String
-  distributorOrgId    String
-  status              ReturnRequestStatus @default(REQUESTED)
-  reasonCode          ReturnReasonCode
-  reasonNote          String?
-  requestedAt         DateTime @default(now())
-  windowExpiresAt     DateTime          // computed from delivery + RETURN_WINDOW_DAYS
-  reviewedByUserId    String?
-  reviewedAt          DateTime?
-  reviewNote          String?
-  pickupAssignmentId  String?           // links to a delivery-partner return pickup
-  receivedAt          DateTime?
-  inspectedByUserId   String?
-  inspectedAt         DateTime?
-  inspectionOutcome   ReturnInspectionOutcome?
-  inspectionNote      String?
-  refundableAmountPaise Int?            // backend-calculated, never client-supplied
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  items               ReturnRequestItem[]
-  evidence            ReturnRequestEvidence[]
-  statusHistory       ReturnRequestStatusHistory[]
-  refunds             Refund[]
-}
-
-model ReturnRequestItem {
-  id                  String @id @default(uuid())
-  returnRequestId     String
-  productOrderItemId  String
-  quantity            Int
-  unitPricePaise      Int              // snapshot from the order item
-  lineRefundPaise     Int              // backend-calculated
-  reservationId       String?          // ProductOrderItemReservation, for batch traceability
-}
-
-model ReturnRequestEvidence { /* mirror SupportTicketEvidence exactly */ }
-model ReturnRequestStatusHistory { /* mirror ProductOrderStatusHistory exactly */ }
-
-model Refund {
-  id                  String @id @default(uuid())
-  productOrderId      String
-  returnRequestId     String?          // null for cancellation-driven refunds
-  paymentIntentId     String?
-  farmerUserId        String
-  amountPaise         Int
-  method              RefundMethod
-  status              RefundStatus @default(PENDING)
-  providerRefundRef   String?
-  providerMode        PaymentProviderMode   // reuse the existing enum: MOCK / SANDBOX / LIVE
-  failureReason       String?
-  idempotencyKey      String @unique
-  initiatedByUserId   String
-  initiatedAt         DateTime @default(now())
-  completedAt         DateTime?
-  events              RefundEvent[]
-}
-
-model RefundEvent { /* mirror PaymentEvent exactly */ }
-
-model Dispute {
-  id                  String @id @default(uuid())
-  productOrderId      String?
-  serviceBookingId    String?          // nullable now; populated after WP-14
-  returnRequestId     String?
-  raisedByUserId      String
-  againstOrganisationId String?
-  status              DisputeStatus @default(OPEN)
-  category            String
-  description         String
-  assignedToUserId    String?
-  resolutionNote      String?
-  resolvedAt          DateTime?
-  resolutionAmountPaise Int?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  events              DisputeEvent[]
-}
-
-model DisputeEvent { /* actor, action, note, timestamp */ }
-```
-
-Also add two `InventoryMovementType` values: `RETURN_QUARANTINED` and `RETURN_RESTOCKED`. **Do not** reuse `STOCK_RECEIVED` for returns — provenance must be distinguishable in the ledger forever.
-
-Add `FinancialLedgerEntryType` values if not already present: `REFUND`, `RETURN_ADJUSTMENT`.
-
-**2. `src/returns/` module.**
-
-| Method | Endpoint | Actor | Notes |
-|---|---|---|---|
-| POST | `/returns` | Farmer | Requires `Idempotency-Key`. Order must be `DELIVERED` and inside the return window. Creates `ReturnRequest` + items, moves order to `RETURN_REQUESTED`. |
-| GET | `/returns/me` | Farmer | Own requests. |
-| GET | `/returns/:id` | Farmer / distributor / ops | Ownership-scoped. |
-| POST | `/returns/:id/evidence` | Farmer | Mirrors support ticket evidence. |
-| GET | `/returns` | Ops / distributor | Filterable queue. |
-| POST | `/returns/:id/approve` | Distributor / ops | → `APPROVED`, order → `RETURN_APPROVED`. |
-| POST | `/returns/:id/reject` | Distributor / ops | → `REJECTED`, order → `RETURN_REJECTED`. Requires a reason. |
-| POST | `/returns/:id/pickup` | Delivery partner / ops | → `IN_TRANSIT`, order → `RETURN_IN_TRANSIT`. |
-| POST | `/returns/:id/receive` | Distributor | → `RECEIVED`. |
-| POST | `/returns/:id/inspect` | Distributor / ops | Records `inspectionOutcome`. **This is where inventory moves.** |
-| POST | `/returns/:id/cancel` | Farmer | Only before `IN_TRANSIT`. |
-
-**Inspection logic — the critical piece:**
-- `RESTOCKABLE` → append a `RETURN_RESTOCKED` movement against the original batch. Requires an explicit inspector decision; never automatic.
-- `DAMAGED_WRITE_OFF` → append `DAMAGE_WRITE_OFF`. Stock does **not** become sellable.
-- `QUARANTINED` → append `RETURN_QUARANTINED`. Not sellable. Requires a later separate decision.
-- `REJECTED_RETURN` → no inventory movement; no refund; order returns to `DELIVERED`.
-
-**3. `src/refunds/` module.** (May live inside `src/payments/` — decide and be consistent.)
-
-| Method | Endpoint | Actor |
-|---|---|---|
-| POST | `/refunds` | Ops / finance — requires `Idempotency-Key` |
-| GET | `/refunds` | Ops / finance |
-| GET | `/refunds/me` | Farmer |
-| GET | `/refunds/:id` | Scoped |
-| POST | `/refunds/:id/confirm` | **Mock provider only** — mirrors `POST /payments/mock-intents/:id/confirm` |
-
-Refund processing runs on the `payment-webhooks` queue (WP-04). On `SUCCEEDED`, inside one transaction:
-1. Set `Refund.status = SUCCEEDED`, write a `RefundEvent`.
-2. Post a `REFUND` `FinancialLedgerEntry` (negative to the farmer-payment side, offsetting the distributor payable).
-3. Call the **existing** `financeService.reverseCommissionEntry` for the affected commission entries — marketplace commission and promoter commission both reverse.
-4. Move the order to `REFUNDED` (or `CLOSED` after full settlement) and write status history.
-5. Write audit records.
-
-**4. `src/disputes/` module.** Model it on `src/support/` — it has the closest lifecycle shape. Endpoints: create, list, list mine, detail, assign, add event/note, request info from farmer/distributor, resolve (with resolution amount and direction), close. A resolution that awards money raises a `Refund` or an `adjustment` ledger entry — never a direct balance edit.
-
-**5. Wire the return window.** `RETURN_WINDOW_DAYS` (currently `7`, marked "pending approval") already gates commission finalisation. It must now also gate return eligibility. Get the real number signed off by the business before pilot.
-
-**6. Notifications.** After WP-06, emit events on: return requested, approved, rejected, picked up, inspected, refund initiated, refund completed, dispute raised, dispute resolved.
-
-### Acceptance criteria
-- A farmer can request a return on a `DELIVERED` order within the window and **cannot** outside it.
-- Approve → pickup → receive → inspect flows through every status with full history and audit.
-- `RESTOCKABLE` inspection is the **only** path that makes stock sellable again, and it produces a distinguishable `RETURN_RESTOCKED` movement.
-- A completed refund posts a `REFUND` ledger entry **and** reverses both marketplace and promoter commission entries.
-- Refund creation is idempotent — the same `Idempotency-Key` never double-refunds.
-- No financial row is ever updated in place in a way that loses history.
-- Dispute resolution awarding money creates a refund or adjustment entry, never a silent balance change.
-
-### Tests
-- `test/returns.service.spec.ts`, `test/refunds.service.spec.ts` (unit).
-- `test/integration/returns-refunds.spec.ts` — full happy path plus: outside-window rejection, double-refund idempotency, commission reversal assertions, restock vs write-off inventory assertions, cross-distributor isolation, farmer cannot act on another farmer's return.
-- **Extend `mvp-acceptance.spec.ts`** with a return/refund tail so the flagship test covers the complete lifecycle.
+1. **Background job infrastructure** — no BullMQ queue, worker, processor or scheduler.
+2. **File and object storage** — no storage client, no upload path, no `StoredFile` model.
+3. **Real payment provider adapter** — the provider-neutral webhook, reconciliation and refund foundation exists; no Razorpay/PayU/Cashfree adapter can be selected without the merchant-account decision.
+4. **External notification transports** — no SMS, WhatsApp, push or email provider of any kind.
+5. ~~**GST modelling and private invoice/credit-note PDF engineering**~~ — **delivered**, including farmer download UI; subject to CA approval before production use. Portal download UI remains open.
+6. **Invoice PDF generation** — no PDF library in any workspace.
+7. **Distributor allocation engine** — no ranked allocation, no recorded `allocationReason`.
+8. **Service marketplace** — nothing.
+9. **Product reviews and ratings** — no model, no endpoint, no moderation.
+10. ~~**Dispute portal UI**~~ — **delivered 2026-08-19** as part of WP-09r; see §5.
+11. ~~**Deployment infrastructure**~~ — **partially delivered 2026-08-19.** A multi-stage `apps/marketplace-api/Dockerfile` builds the API and worker from one image, with a separate `migrator` stage so `migrate deploy` runs as a deployment step rather than on boot. `docker-compose.yml` gains opt-in `app` and `migrate` profiles, and CI builds both images, applies migrations from the migrator and proves the container serves and shuts down cleanly. **Still open:** image registry and tagging, orchestration manifests, secrets management, TLS/ingress and monitoring — all of which depend on the unmade hosting decision.
+12. **Weather and Crop Doctor** — the farmer home screen honestly renders a "weather unavailable" card; there is no weather integration and no Crop Doctor feature.
+13. ~~**API security hardening**~~ — **delivered 2026-08-19.** `helmet`, a global rate limit applied by an `APP_GUARD` (routes needing stricter limits keep their own `@Throttle`), an explicit request body ceiling, and single-owner graceful shutdown. Two defects surfaced while covering it: oversized bodies and malformed JSON were reported as **500s** because the exception filter only honoured `HttpException`, and `enableShutdownHooks()` racing a hand-rolled SIGTERM handler double-closed the app so roughly one stop in two exited non-zero. Both fixed. **Still open:** the throttler counts in memory, so the ceiling behind N replicas is N × the limit — a shared store is required before scaling out.
 
 ---
 
-## WP-06 — Real notification providers
+## 4. The revised critical path
 
-**Why:** `PRODUCT_REQUIREMENTS.md` §20. The abstraction exists and is good; nothing is sent, and **nothing is auto-triggered by domain events**. Today a human must POST to `/notifications/:id/attempt` to mark a notification "sent".
+The question that should drive sequencing is: **what stops a real farmer, in a real village, from completing a real paid order today?**
+
+Answers, in order:
+
+1. **They cannot receive an OTP** — no SMS provider exists. → WP-06
+2. **They cannot pay real money** — no payment provider exists. → WP-07
+3. **A legally valid invoice still cannot be issued** — the GST data/calculation and PDF/credit-note pipeline exists, but CA approval remains mandatory before production use. → WP-15
+4. **No document, photo or evidence can be uploaded** — no storage. → WP-08
+5. **Nothing can be deployed** — ~~no Dockerfile~~; the image, migrator and compose profiles exist and are exercised in CI as of 2026-08-19. What remains is a _destination_: registry, orchestration, secrets and TLS, none of which can be settled before the hosting decision. → WP-16
+6. **Operations cannot see the business** — the portal home does not use the dashboards API. → WP-09
+
+Notice what is _not_ on this list: the farmer app, the partner app, the Kisan Club, returns, fulfilment, finance and localisation. **Those are done.** The remaining critical path is almost entirely _integration and operations_, not product features.
+
+Two structural dependencies gate most of it:
+
+- **WP-04 (jobs)** must land before WP-06, WP-07 and WP-15B — notification sends, webhook processing, PDF rendering and virus scanning all belong on a queue.
+- **WP-08 (storage)** must land before WP-15B, the KYC flows, photo proof, and evidence in WP-05/12/13.
+
+So the true ordering is: **commit the work → WP-04 + WP-08 in parallel → WP-06 + WP-07 in parallel → WP-15A/B → WP-09 → WP-16 → pilot.**
+
+---
+
+## 5. Work packages — the open work only
+
+Definition of Done in `docs/HANDOVER.md` §11 applies to every task here without exception. Re-read it before starting any of them.
+
+---
+
+### WP-01r — Secure the work, then clean the repository
+
+**Priority: DO THIS FIRST, TODAY. Nothing else in this plan matters until it is done.**
+**Estimate:** 1 day for the commit, 1–2 days for the rest.
+
+1. **Commit and push everything.** 355 files of unbacked work is an unacceptable risk.
+   - Review `git status` and confirm nothing secret is staged (`.env` is correctly gitignored — verify it stays that way).
+   - Commit in logical slices if you can (Kisan Club, returns/refunds, delivery, farmer app, partner app, portal, docs), or as one honest "three weeks of work" commit if slicing risks losing it. **A single imperfect commit beats no commit.**
+   - Push to a remote. If there is no remote yet, create one now — private — before anything else.
+2. **Branching model.** Create `main` from `master`, make it default, protect it (require PR, require CI green, no direct push). Feature branches `feat/wp-06-notifications`, `fix/…`, `chore/…`. Squash-merge with conventional commit titles.
+3. **Clean the tree.**
+   - Delete the four stale root log files (`business-web.dev.*.log`, `business-web.phase1b.*.log`) — `*.log` is already gitignored, they are simply left over.
+   - Move the tracked binaries `Vardhnam_Agrotech_Codex_Development_Blueprint.docx` and `progress till date.pdf` into `docs/reference/` or out of the repository.
+   - Delete `apps/business-web/src/components/role-dashboard.tsx` — it renders hardcoded metrics from `portal-copy.ts` and **is imported by nothing**. It is the most misleading artefact left in the portal.
+   - Remove the dead `BUSINESS_WEB_MOCK_USER_ID` / `BUSINESS_WEB_MOCK_ROLE` / `BUSINESS_WEB_MOCK_ORGANISATION_ID` entries from `.env` and `.env.example` — no code reads them any more.
+4. **Make the integration suite self-configuring.** Two local-config traps were hit while producing this document; both cost an afternoon and neither is the developer's fault.
+   - **`.env` defines `DATABASE_URL` but not `TEST_DATABASE_URL`.** `test/integration/setup.ts` silently falls back to `DATABASE_URL`. Credit where due: `resetIntegrationDatabase()` **does** guard against this — it refuses unless the database name contains `test`, so the dev database is not at risk. But the failure is a confusing mid-run throw rather than a clear "you forgot to set `TEST_DATABASE_URL`" at startup. Add `TEST_DATABASE_URL` to `.env` (it is already in `.env.example`) and make `setup.ts` fail fast with that message instead of falling back.
+   - **`.env` and `.env.example` both ship `AUTH_MODE=production`,** but 29 of the 30 specs authenticate with mock headers. Running the documented command against the shipped config produces **27 of 30 suites failing with blanket 401s** — which looks exactly like a catastrophic regression and is not one. See §1.6: the 30th spec requires the opposite value, so this needs splitting rather than a single default.
+   - `README.md` makes both worse: its Quality Checks section says integration tests "need PostgreSQL and Redis running with `DATABASE_URL` and `REDIS_URL` set" — never mentioning `TEST_DATABASE_URL` — while an earlier section tells you to set `AUTH_MODE=production` for the portal and leaves it there.
+   - **Best fix:** move the required test environment into `jest.integration.config.cjs` / `setup.ts` so the suite configures itself and cannot be run wrong, split the auth spec into its own Jest project per §1.6, then reduce the `README.md` Quality Checks section to a single copy-pasteable command.
+5. ~~**Fix the two integration defects in §1.6**~~ — **done 2026-08-17.** CI now also sets `TEST_DATABASE_URL` and a CI-specific `QUEUE_PREFIX`.
+6. **Rotate secrets.** Generate a real ≥32-char `JWT_ACCESS_SECRET` per environment. Never reuse the `.env.example` placeholder.
+7. **Environment matrix.** Document `local` / `staging` / `production` templates in `docs/` (values redacted), listing which mock provider flags flip in each.
+
+**Acceptance:** `main` is protected; **CI is green on the first run, including the integration job**; a fresh clone plus `npm install` leaves `git status` clean; `npm run test:integration` works from a clean checkout with no manual environment setup.
+
+---
+
+### WP-04 — Background jobs with BullMQ ✅ DELIVERED 2026-08-17
+
+**Status: DONE.** Architecture and rationale are recorded in `docs/DECISIONS/0010-background-job-architecture.md`; the endpoint contract is in `docs/API_CONTRACTS.md` § Background Job Administration Endpoints. Read the ADR before extending any of this.
+
+**What shipped:**
+
+| Area        | Delivered                                                                                                                                                                                                                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Module      | `src/jobs/` — `QueueService` (queue registry, typed enqueue, depth metrics, dead-letter read/replay), `JobRunnerService` (worker registration and routing), `SchedulerService` (repeatable jobs), `AdminJobsService`/`AdminJobsController`.                                |
+| Queues      | Five declared in `queue-names.ts`: `scheduled-maintenance` (has handlers) plus `notifications`, `payment-webhooks`, `tally-sync`, `documents` reserved for WP-06/07/08. Reserved queues are visible in admin metrics and sit empty until their producers exist.            |
+| Correlation | Every payload is wrapped in a `JobEnvelope` carrying the enqueueing request's `requestId`, logged on every attempt.                                                                                                                                                        |
+| Retry / DLQ | Exponential backoff from 1s, `JOB_MAX_ATTEMPTS` (default 5), bounded completed/failed retention. Exhausted jobs move to a `<queue>-dead-letter` queue retaining payload, failure reason, stack and attempt count, and never retry on their own.                            |
+| Admin       | `GET /admin/jobs/queues`, `GET /admin/jobs/dead-letter`, `POST /admin/jobs/dead-letter/:jobId/retry` behind new `jobs:read` / `jobs:manage`, granted to `SUPER_ADMIN` and `ADMIN` only. Replay is audited as `JOB_DEAD_LETTER_RETRIED`.                                    |
+| Worker      | `npm run start:worker` (`start:worker:dev` for watch mode) runs the same Nest app with no HTTP listener. `WORKER_MODE` is forced on by that entrypoint and gates both worker startup and schedule registration, so a scaled API tier cannot register duplicate schedulers. |
+| Health      | `/health/ready` reports `queues` as a check separate from `redis`, because the queue connection uses different retry settings.                                                                                                                                             |
+| Config      | `WORKER_MODE`, `WORKER_CONCURRENCY`, `JOB_MAX_ATTEMPTS`, `QUEUE_PREFIX`, `SCHEDULER_TIMEZONE` added to `env.schema.ts` and `.env.example`.                                                                                                                                 |
+| Tests       | `test/audit-actor.spec.ts`, `test/maintenance-jobs.spec.ts` (unit), `test/integration/jobs.spec.ts` (enqueue → retry → dead-letter → audited replay → 404 on missing entry, plus a 403 permission check).                                                                  |
+
+**Scheduled jobs now running** (staggered outside Indian business hours, `SCHEDULER_TIMEZONE`):
+
+| Job                             | Schedule    | Effect                                                                                                                          |
+| ------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `finalize-eligible-commissions` | 01:15 daily | Finalises commission entries past their return window. Previously only ran when an operator POSTed manually.                    |
+| `expire-batches`                | 01:30 daily | Moves `ACTIVE` batches past expiry to `EXPIRED` so they leave derived availability. Audited per batch, in the same transaction. |
+| `prune-refresh-tokens`          | 01:45 daily | Deletes expired tokens and tokens revoked more than 30 days ago.                                                                |
+| `expire-otp-challenges`         | hourly      | Deletes expired and consumed OTP challenges.                                                                                    |
+
+**Two specified jobs were deliberately not built:**
+
+- **`support-sla-breach-sweep`** — `SupportTicket` has `slaDueAt` but no breach flag, so "flagging" needs a schema change, and the notification it exists to trigger does not exist until WP-06. Shipping a job that computes a breach and discards it would be theatre. **Moved into WP-06**, where the notification producer gives it a purpose.
+- **`return-window-sweep`** — redundant. The return window already sets `CommissionEntry.eligibleAt`, which `finalize-eligible-commissions` consumes. **Dropped.**
+
+**One design decision worth knowing about** (full reasoning in the ADR): scheduled jobs change state with no human actor. Rather than inventing a synthetic "system user" row to satisfy the `AuditLog.actorUserId` foreign key, a `SystemActor` (`src/common/audit-actor.ts`) records the change with actor identity **null** and the triggering job named in `reason`, e.g. `Return/dispute window elapsed (job:finalize-eligible-commissions)`. A synthetic user would be able to hold memberships and be assigned work, and would appear in operator lists as though a person had acted.
+
+**This means any operator-facing audit view must render a null actor as "system"** rather than as a blank or an error. That is a small requirement on WP-09r's audit surface.
+
+**Two traps found while building this, both now guarded by tests — read before touching `src/worker.ts`:**
+
+1. **A static `import { AppModule }` in the worker entrypoint silently disables the worker.** `ConfigModule.forRoot()` executes when `app.module.ts` is _evaluated_, and a static import is hoisted above `process.env.WORKER_MODE = 'true'` — so the environment is validated and cached with the flag still false. The worker then boots, logs "Marketplace worker started", and consumes nothing. It was caught only by a smoke test that checked Redis for registered schedules, because every log line looked healthy. The import is now dynamic and `test/job-runner.spec.ts` asserts the ordering.
+2. **`validateEnv(process.env)` must run _after_ that import,** because evaluating `AppModule` is what loads the `.env` file into `process.env`. `main.ts` has the same hidden dependency; its static import masks it.
+
+**Verification:** lint, type-check and build clean; 41 unit suites / 199 tests pass; the integration suite is fully green at 31 suites / 110 tests; the built worker was smoke-tested and confirmed to register 4 handlers and 4 repeatable schedules in Redis.
+
+**What this unblocks:** WP-06, WP-07 and WP-15B no longer need queue infrastructure work. Each plugs in by registering a `JobHandler` for its already-declared queue.
+
+---
+
+### WP-08 — File and document storage ✅ DELIVERED 2026-08-17
+
+**Status: DONE**, with one deliberate gap. Architecture and rationale: `docs/DECISIONS/0011-file-and-document-storage.md`. Endpoint contract: `docs/API_CONTRACTS.md` § File And Document Storage Endpoints. Retention and handling rules: `docs/SECURITY_AND_COMPLIANCE.md` § Stored Files.
+
+**What shipped:**
+
+| Area       | Delivered                                                                                                                                                                                                                                                                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model      | `StoredFile` with purpose, status, server-generated object key, declared vs observed size, checksum, scan result and rejection reason. `KycDocument` and `SupportTicketEvidence` gained nullable `storedFileId` FKs alongside their legacy `storageKey` columns.                                                  |
+| Lifecycle  | `PENDING_UPLOAD → PENDING_SCAN → AVAILABLE`, with `INFECTED` and `REJECTED` terminal. A database `CHECK` constraint enforces that `AVAILABLE` requires a recorded clean scan, so no application bug can produce a downloadable file that was never scanned.                                                       |
+| Flow       | Request URL → client `PUT`s directly to storage → confirm → scan → download URL. Bytes never pass through the API.                                                                                                                                                                                                |
+| Validation | Per-purpose content-type and size policy in `upload-policy.ts`, enforced at issue **and again on confirm against the object storage actually holds**. Optional checksum verification. Failures set `REJECTED` and delete the object.                                                                              |
+| Access     | Authorised in the API; the bucket is never public. `files:read:any` → uploader → same-organisation member with `files:read:own`. `KYC_DOCUMENT` and `INVOICE_PDF` audit every download URL issued.                                                                                                                |
+| Scanning   | Runs on the WP-04 `documents` queue. `SCAN_FAILED` is not a verdict: the handler throws, the file stays undownloadable, and BullMQ retries then dead-letters for an operator.                                                                                                                                     |
+| Provider   | `LocalDiskStorageProvider` mimics presigned-URL semantics with HMAC-signed, time-limited URLs against its own `storage/local-object` endpoint, so dev and CI exercise the real client flow including signature and expiry rejection.                                                                              |
+| Tests      | `test/upload-policy.spec.ts` (6 unit tests) and `test/integration/file-storage.spec.ts` (12 integration tests) covering the full journey, EICAR quarantine, content-type spoofing, checksum mismatch, cross-organisation denial, tampered and expired URLs, uploader-only confirm, and replayed-scan idempotency. |
+
+**The one deliberate gap: no cloud provider.** Which cloud is still an open business decision (§9, decision 3), and an SDK for the wrong provider is dead weight. Adding one is a single file implementing `StorageProvider` plus a case in the `StorageModule` factory — nothing else in the module is provider-aware. **The factory throws on any unrecognised `STORAGE_PROVIDER` rather than falling back to local disk**, so this cannot be deployed by accident.
+
+**`VIRUS_SCANNER=mock` is not virus scanning** — it recognises the EICAR test string and passes everything else. It exists so the quarantine path is genuinely exercised in CI. A real scanner is required before any environment holds real uploads; both flags are on the WP-16 go-live checklist.
+
+**Three bugs the tests caught, worth knowing about:**
+
+1. **BullMQ rejects `:` in custom job IDs**, just as it does in queue names — `scan:<uuid>` made every confirm return 500. Use hyphens in anything BullMQ names.
+2. **`GET /files/:fileId` shadowed the storage data-plane route**, returning 401 for valid signed URLs, and which controller won depended on registration order. The local provider endpoint now lives under `storage/`, outside the `files/` namespace, so the collision cannot recur.
+3. The `documents` queue handler lives in `StorageModule` but workers start in `JobsModule`, which would have been a circular import. WP-04's handler wiring was refactored to a `JobHandlerRegistry`: feature modules register during `onModuleInit`, and `JobRunnerService` reads the complete set during `onApplicationBootstrap`. **This is the extension point for WP-06 and WP-07** — register a handler, do not touch `JobsModule`.
+
+**Verification:** lint, type-check and build clean; 42 unit suites / 205 tests pass; the integration suite is green at 32 suites / 122 tests, exit 0.
+
+**One more trap this exposed, now fixed:** the WP-04 jobs spec had borrowed the `documents` queue on the assumption that nothing produced to it. WP-08's scan jobs broke that assumption and the spec failed with a baffling attempt trace. It now uses a queue with no producer, drains before each test, and ignores jobs it did not create. **WP-06 and WP-07 will add producers to `notifications` and `payment-webhooks` — do not let that spec borrow those.**
+
+**What this unblocks:** WP-15B invoice PDFs, WP-12r KYC and photo proof, WP-13r visit evidence, WP-05r return evidence, WP-10r product images and WP-17's real imagery.
+
+---
+
+### WP-06 — Real notification providers ✅ DELIVERED 2026-08-18
+
+**Status: DONE**, except for real provider accounts, which are a business decision rather than missing code. Architecture and rationale: `docs/DECISIONS/0012-notification-delivery.md`. Endpoint contract: `docs/API_CONTRACTS.md` § Notification Endpoints.
+
+**What shipped:**
+
+| Area        | Delivered                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Providers   | `NotificationProvider` per channel, selected by the existing `SMS_PROVIDER` / `WHATSAPP_PROVIDER` / `EMAIL_PROVIDER` flags plus a new `PUSH_PROVIDER`. Mock transports stamp a permanent `MOCK-` provider reference so a mock delivery is never mistaken for a real one. An unimplemented provider throws at resolution rather than falling back.                            |
+| Delivery    | `send-notification` handler on the `notifications` queue, with WP-04 retry, backoff and dead-lettering. Providers never retry internally. A `PermanentDeliveryError` is recorded without retrying, so something undeliverable does not burn the whole attempt budget.                                                                                                        |
+| Dispatch    | A `dispatch-pending-notifications` sweep every minute queues `PENDING` non-in-app rows older than five seconds. **No producer had to change** — see below.                                                                                                                                                                                                                   |
+| Rows        | One `Notification` row per channel, so a failed SMS cannot make the in-app copy look undelivered. In-app is created `SENT` because the row _is_ the delivery.                                                                                                                                                                                                                |
+| Templates   | Per-channel shaping in `notification-templates.ts`, with **language-aware SMS limits** — Devanagari encodes as UCS-2 at 70 characters per segment against GSM-7's 160, so Hindi truncates against the smaller budget.                                                                                                                                                        |
+| Preferences | `NotificationPreference` per user/category/channel, with `GET`/`PUT /notifications/preferences/me`. Transactional categories cannot be disabled; the class is re-evaluated at send time so a stale preference cannot silence a reclassified category. Suppression records a failed attempt with `SUPPRESSED_BY_PREFERENCE`, never a fake success.                            |
+| OTP         | Routed through the SMS transport. **OTPs are deliberately not `Notification` rows** — such a row is readable via `GET /notifications/me`, so persisting the code would let anyone with a session read a code sent to a phone they do not control. Sent synchronously; a send failure propagates rather than being swallowed. `mockOtpCode` appears only while SMS is mocked. |
+| Ops         | `POST /notifications/:id/dispatch` is the retry path; the old manual `/attempt` endpoint is retained for correction only.                                                                                                                                                                                                                                                    |
+| Tests       | `test/notification-templates.spec.ts` (9 unit tests) and `test/integration/notification-delivery.spec.ts` (9 integration tests) covering send, replay, missing destination, in-app, suppression, transactional protection, stale-preference override and operational re-dispatch.                                                                                            |
+
+**The design decision worth understanding: dispatch is a sweep, not a post-commit call.**
+
+Events create notification rows _inside_ the transaction that makes the change — that is what stops a rolled-back order notifying anyone. But a job cannot be enqueued from inside that transaction. The textbook fix is an explicit post-commit enqueue at every producer; there are **over thirty**, several inside `checkout.service.ts`, and one forgotten call is a notification that silently never sends. Sweeping for `PENDING` rows instead makes the row itself the queue: correct after a commit, a crash or a restart, with no producer able to forget. The cost is up to a minute of latency, which is acceptable for the five SMS events — and OTPs bypass it entirely.
+
+**SMS is deliberately limited to five events** — payment succeeded, out for delivery, delivered, order cancelled, refund succeeded. Every message costs money, and a farmer who receives one per status change stops reading them.
+
+**Verification:** lint, type-check and build clean; 43 unit suites / 214 tests pass; the integration suite is green at 33 suites / 131 tests, exit 0.
+
+**What remains, and why:**
+
+- **Real BSP and provider accounts.** §9 decision 2. Each provider is one file implementing `NotificationProvider`. **WhatsApp templates need pre-registration with the BSP and that has weeks of lead time — start it before writing the code.**
+- **Push, with device-token registration** — moves to WP-10r, since a `PUSH` row today could only record a failure.
+- **The support SLA breach sweep**, inherited from WP-04. Still needs a `slaBreachedAt` column and a migration; worth building together with the escalation notification it should trigger.
+- **Non-farmer recipients.** Organisation approval, catalogue review and offer decisions notify nobody — only farmer-facing lifecycles emit events today.
+- **A database-backed template editor**, deferred to WP-09r with reasoning in the ADR.
+
+---
+
+### WP-07 — Sandbox payment provider and webhooks
+
+**Why:** `PRODUCT_REQUIREMENTS.md` §13. The mock flow is complete and correctly shaped; it needs a real sandbox behind the same interface. It also unblocks the real refund execution left over from WP-05.
 **Depends on:** WP-04.
 **Estimate:** 2 weeks.
 
-### Build
+**Status (2026-08-18): PARTIAL (~75%).** Items 1–3 and 5 are implemented against a network-free mock provider, including real raw-byte HMAC verification, database deduplication, async payment and refund queue processing, exact amount matching, ledger settlement, durable refund-job recovery and finance reconciliation. The operator endpoint remains explicitly mock-only. The real sandbox adapter and its signed asynchronous refund-status webhooks cannot be completed until decision 1 supplies a provider and merchant sandbox credentials.
 
-1. **Provider interface.** `src/notifications/providers/notification-provider.interface.ts`:
-   ```ts
-   interface NotificationProvider {
-     readonly channel: NotificationChannel;
-     send(notification: Notification): Promise<{ providerRef: string }>;
-   }
-   ```
-   Implement per channel, selected by the existing env flags (`SMS_PROVIDER`, `WHATSAPP_PROVIDER`, `EMAIL_PROVIDER`, plus new `PUSH_PROVIDER`):
-   - `MockSmsProvider` / `MockWhatsappProvider` / `MockEmailProvider` / `MockPushProvider` — keep these; they are what dev and CI use. **Keep them clearly labelled as mock.**
-   - Real: SMS + WhatsApp via an Indian BSP (MSG91, Gupshup, Karix or Twilio); push via FCM (Android + iOS); email via SES/SendGrid.
-   - In-app needs no provider — it is already satisfied by the `Notification` row plus `GET /notifications/me`.
-
-2. **Worker.** A `notifications` queue processor replaces the manual attempt endpoint as the normal path. Keep the manual endpoint for ops replay, guarded. Retry with backoff; exhausted retries → DLQ, notification → `FAILED`.
-
-3. **Templates.** `NotificationTemplate` keyed by `(category, channel, locale)`, with variable interpolation from `payloadSnapshot`. **Both `en` and `hi` are required from MVP** (`PRODUCT_REQUIREMENTS.md` §24). WhatsApp templates must be pre-registered with the BSP — allow lead time for approval.
-
-4. **User preferences.** `NotificationPreference` per user per category per channel, with sensible defaults. Transactional notifications (OTP, order status, refund) should not be opt-out-able; marketing ones must be.
-
-5. **Wire domain events — this is the point of the whole package.** Emit notifications from the services that already exist:
-
-   | Event | Recipient | Channels |
-   |---|---|---|
-   | OTP requested | User | SMS (replaces `mockOtpCode`) |
-   | Organisation approved / rejected | Org owner | Email + in-app |
-   | Catalogue product approved / rejected | Company | Email + in-app |
-   | Offer approved / rejected / paused | Distributor | In-app |
-   | Order confirmed (payment success) | Farmer + distributor | Push + SMS + in-app |
-   | Order accepted / rejected by distributor | Farmer | Push + in-app |
-   | Order packed / invoiced / ready for pickup | Farmer | Push |
-   | Delivery assigned | Delivery partner | Push |
-   | Out for delivery (**+ delivery OTP**) | Farmer | Push + SMS |
-   | Delivered | Farmer | Push + in-app |
-   | Order cancelled | Farmer + distributor | Push + in-app |
-   | Return requested / approved / rejected | Farmer + distributor | Push + in-app |
-   | Refund initiated / completed | Farmer | Push + SMS |
-   | Support ticket assigned / resolved / SLA breach | Requester + agent | In-app + email |
-   | Commission finalised, settlement created | Partner / distributor | In-app + email |
-   | Low stock / expiring batch | Distributor | In-app + email |
-
-   Use a Nest `EventEmitter` (or direct service calls inside the existing transactions) → enqueue on the `notifications` queue. **Enqueue after the transaction commits**, so a rolled-back order never notifies anyone.
-
-6. **Delivery OTP must move to SMS.** Today the mock OTP is returned in the assignment API response. Once SMS is live, the OTP goes to the farmer's phone and the response stops exposing it outside mock mode.
-
-### Acceptance criteria
-- With all providers set to `mock`, everything works exactly as today and CI is unaffected.
-- With a real SMS provider configured in staging, an OTP arrives on a real phone and `mockOtpCode` is absent from the response.
-- Every event in the table above produces a `Notification` row automatically, with no manual API call.
-- Failed sends retry with backoff and land in the DLQ; the notification shows `FAILED` with the provider error.
-- Users can opt out of non-transactional categories.
-- Hindi templates render correctly.
-
----
-
-## WP-07 — Sandbox payment provider and webhooks
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §13, Phase 7. The mock flow is complete and correct in shape; it now needs a real sandbox behind the same interface.
-**Depends on:** WP-04, and WP-05 for refunds.
-**Estimate:** 2 weeks.
-
-### Build
-
-1. **Provider abstraction.** `src/payments/providers/payment-provider.interface.ts` with `createIntent`, `verifyWebhookSignature`, `fetchIntentStatus`, `createRefund`. Implementations: `MockPaymentProvider` (existing behaviour, kept for dev/CI) and `RazorpayProvider` (or PayU/Cashfree — pick based on the business's merchant account). Selected by `PAYMENT_PROVIDER`. The existing `PaymentProviderMode` enum (`MOCK` / `SANDBOX` / `LIVE`) already models this — use it.
-
+1. **Provider abstraction** `src/payments/providers/payment-provider.interface.ts` with `createIntent`, `verifyWebhookSignature`, `fetchIntentStatus`, `createRefund`. Implementations: `MockPaymentProvider` (existing behaviour, kept for dev/CI) and a real provider — Razorpay/PayU/Cashfree, chosen by the business's merchant account. The existing `PaymentProviderMode` enum (`MOCK`/`SANDBOX`/`LIVE`) already models this.
 2. **Webhook endpoint** `POST /payments/webhooks/:provider`:
-   - **Verify the signature before anything else.** `AGENTS.md` requires authenticated webhook signatures. Reject with 401 on mismatch and log it as a security event.
-   - Persist the **raw** payload immediately (`WebhookEvent` model: provider, event id, signature, raw body, received at, processing status).
-   - Deduplicate on the provider event id — **webhooks must be idempotent** and providers do redeliver.
+   - **Verify the signature before anything else.** Reject with 401 on mismatch and log it as a security event.
+   - Persist the **raw** payload immediately in a new `WebhookEvent` model (provider, event id, signature, raw body, received at, processing status).
+   - Deduplicate on the provider event id — providers _do_ redeliver.
    - Return 200 fast; process asynchronously on the `payment-webhooks` queue.
-   - **A frontend redirect is never proof of payment** (`PRODUCT_REQUIREMENTS.md` §13). Only a server-verified webhook or an explicit server-side status fetch may mark a payment successful.
+   - **A frontend redirect is never proof of payment.** Only a server-verified webhook or an explicit server-side status fetch may mark a payment successful.
+3. **Reconciliation.** A WP-04 scheduled job fetching provider status for intents stuck in `PROCESSING` beyond a threshold, plus `GET /payments/reconciliation` for finance showing local/provider disagreement.
+4. **Refund execution** against the real provider, replacing the mock confirm path built in WP-05.
+5. **Ledger integration.** A successful capture posts the farmer-payment ledger entry. Verify the amount from the **provider payload**, never the client, and reject mismatches loudly.
+6. **Security.** Never log full payment payloads containing card/UPI identifiers. Provider keys live in secret management, not `.env`, in production.
 
-3. **Reconciliation.** A scheduled job that fetches provider status for any intent stuck in `PROCESSING` beyond a threshold, and a `GET /payments/reconciliation` report for finance showing intents whose local status disagrees with the provider.
-
-4. **Refund execution** against the real provider, replacing the mock confirm path from WP-05.
-
-5. **Ledger integration.** A successful capture must post the farmer-payment ledger entry. Verify the amount from the **provider payload**, not the client, and reject mismatches loudly.
-
-6. **Security.** Never log full payment payloads with card/UPI identifiers. Store provider keys in secret management, not `.env` in production.
-
-### Acceptance criteria
-- Sandbox payment completes end to end and the order reaches `CONFIRMED` **only** after webhook verification.
-- A tampered signature is rejected and logged.
-- The same webhook delivered five times produces exactly one state change.
-- A refund issued through the provider reaches `SUCCEEDED` and posts the ledger entry and commission reversal.
-- The reconciliation report flags a deliberately desynchronised intent.
-- Switching `PAYMENT_PROVIDER=mock` restores the current behaviour so CI never touches the network.
+**Acceptance:** sandbox payment reaches `CONFIRMED` **only** after webhook verification; a tampered signature is rejected and logged; the same webhook delivered five times produces exactly one state change; a real refund reaches `SUCCEEDED` and posts ledger entry plus commission reversal; the reconciliation report flags a deliberately desynchronised intent; `PAYMENT_PROVIDER=mock` restores current behaviour so CI never touches the network.
 
 ---
 
-## WP-08 — File and document storage
+### WP-15A/B — GST modelling and invoice PDFs — WP-15A engineering delivered 2026-08-18
 
-**Why:** KYC documents, product images, product labels, delivery proof photos, return evidence and support evidence are **all metadata-only today**. There is no file storage anywhere in the repo. Every one of those features is unusable in the real world without it.
-**Depends on:** WP-01.
-**Estimate:** 1 week.
+**Why:** `PRODUCT_REQUIREMENTS.md` §14 defers GST, but **no invoice can legally issue in India without it**, and farmers need a downloadable invoice. These two block real commercial operation more than anything else in Stage 5.
+**Depends on:** WP-08 (PDF storage), WP-04 (render job).
+**Estimate:** 2 weeks (15A) + 1 week (15B).
 
-### Build
+**15A — GST and tax modelling.** Agricultural inputs span multiple GST slabs (many fertilisers 5%, pesticides 18%, some seeds exempt) — this is not a single-rate problem.
 
-1. **Storage abstraction.** `src/storage/storage.provider.interface.ts` with `getUploadUrl`, `getDownloadUrl`, `delete`, `getMetadata`. Implementations: `LocalDiskProvider` (dev/CI) and `S3Provider` (or GCS). Selected by `STORAGE_PROVIDER`.
+**Delivered engineering scope:** `ProductVariant` now carries HSN and basis-point GST metadata, catalogue submission requires it on active variants, and checkout copies immutable tax snapshots onto each order line. Approved distributor GSTIN/state plus the delivery-address state code determine place of supply. Invoice generation treats existing prices as tax-inclusive, extracts tax per line using integer arithmetic, persists CGST/SGST or IGST components with database reconciliation constraints, and allocates a transactional sequence per distributor and Indian financial year. ADR 0015 records the rounding, snapshot and numbering decisions. Seeded classifications remain explicit placeholders and the full result is not production tax advice until the required CA review is recorded.
 
-2. **Direct-to-storage uploads.** The API issues a **presigned upload URL**; the client uploads directly; the client then confirms with the API, which records the object key. Do not proxy file bytes through the API.
-
-3. **`StoredFile` model:** id, ownerUserId, organisationId, purpose (`KYC_DOCUMENT` / `PRODUCT_IMAGE` / `PRODUCT_DOCUMENT` / `DELIVERY_PROOF` / `RETURN_EVIDENCE` / `SUPPORT_EVIDENCE` / `SERVICE_EVIDENCE`), object key, content type, size, checksum, virus-scan status, created at. Existing metadata models (`KycDocument`, `ProductDocument`, `SupportTicketEvidence`, and the new return/service evidence models) get a nullable `storedFileId` FK.
-
-4. **Validation:** allowed MIME types and max size per purpose, enforced when the presigned URL is issued **and** re-verified on confirm (a client can upload anything to a presigned URL).
-
-5. **Access control:** downloads go through the API, which checks permission and then returns a short-lived signed URL. **Never expose a public bucket.** KYC documents contain PII — log every download as an audit record (`AGENTS.md`: high-risk exports must be logged).
-
-6. **Virus scanning** (ClamAV or the cloud provider's scanner) as a queue job; files stay `PENDING_SCAN` and undownloadable until clean.
-
-7. **Retention policy** documented in `docs/SECURITY_AND_COMPLIANCE.md`.
-
-### Acceptance criteria
-- A distributor uploads a KYC PDF and a reviewer downloads it; both actions are audited.
-- Oversized or wrong-MIME uploads are rejected.
-- A user from another organisation gets 403 on download.
-- Signed URLs expire.
-- `STORAGE_PROVIDER=local` keeps dev and CI free of cloud dependencies.
-
----
----
-
-# STAGE 3 — PORTAL AND FARMER APP
-
----
-
-## WP-09 — Business portal: remaining surfaces
-
-**Why:** Substantial backend capability has no UI. Operations, finance and support teams cannot do their jobs. `PRODUCT_REQUIREMENTS.md` §22: operational action lists matter more than decorative charts.
-**Depends on:** WP-03 (generated client). WP-05 for the returns screens.
-**Estimate:** 4–5 weeks.
-
-### Build
-
-**First, replace the fake home page.** `src/components/role-dashboard.tsx` renders hardcoded metrics from `portal-copy.ts` while a working `GET /dashboards/summary` sits unused. Wire it up: render the permission-scoped items the API returns, each linking to its filtered work queue. Add the audited export using `GET /dashboards/summary/export`. This is the highest-impact single change in the portal.
-
-**New route groups** (follow the existing `app/<area>/page.tsx` + `actions.ts` server-action pattern exactly):
-
-| Route | Contents |
-|---|---|
-| `/finance/commission-rules` | List, create, activate/deactivate rules. |
-| `/finance/commission-entries` | Filterable list; finalise-eligible action; reverse action with reason. |
-| `/finance/ledger` | Filterable ledger with running totals; CSV export (audited). |
-| `/finance/settlements` + `/finance/settlements/[id]` | List, detail with line items, create settlement. |
-| `/payouts/accounts` | Partner payout accounts, verification queue, verify/reject action. |
-| `/payouts/statements` | Per-partner statements. |
-| `/support` + `/support/[ticketId]` | Ticket queue with SLA indicators; detail with the full lifecycle actions (assign, mark-waiting, resume, escalate, resolve, close, reopen) and evidence. |
-| `/returns` + `/returns/[id]` | Return queue; approve/reject/receive/inspect actions with the inspection-outcome selector. **(after WP-05)** |
-| `/refunds` | Refund queue and status. **(after WP-05)** |
-| `/disputes` + `/disputes/[id]` | Dispute queue and resolution. **(after WP-05)** |
-| `/notifications` | Delivery log, failed notifications, retry action. |
-| `/tally` | Sync record list, status, attempt history, retry, reconciliation report. |
-| `/admin/jobs` | Queue depths and DLQ retry. **(after WP-04)** |
-| `/organisations` | Directory with status, membership management, suspend/reactivate. |
-| `/users` | User admin: search, role assignment, status. |
-
-**Cross-cutting portal work:**
-- Extend the nav in `business-shell.tsx` and **filter nav items by the current user's permissions** — a distributor must never see finance links.
-- **Replace the mock-auth env headers with the real auth flow.** The portal currently authenticates every request as a single hardcoded mock user from `BUSINESS_WEB_MOCK_*` env vars. Build real login (`/auth/login`), organisation selection (`/auth/select-organisation`), httpOnly session cookies, refresh-token rotation, and logout. **The portal cannot go to production until this is done** — treat it as the top priority within this WP.
-- Server-side permission validation on every page (`AGENTS.md` §5) — never rely on hiding a button.
-- Pagination, filtering and sorting as reusable components; several existing pages currently render unbounded lists.
-- Empty states, loading states and error states for every new page.
-- Move every new string into `portal-copy.ts`.
-
-### Acceptance criteria
-- Portal home shows live, permission-scoped counts from the API.
-- A `FINANCE_MANAGER` sees finance routes; a `DISTRIBUTOR_OWNER` gets 403 on them, both in the nav and by direct URL.
-- Real login works; no `BUSINESS_WEB_MOCK_*` variable is required to run the portal.
-- Every backend module built to date has at least one portal surface.
-- CSV exports write audit records.
-
----
-
-## WP-10 — Farmer mobile app completion
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §4.1. The app covers browse → cart → checkout preview. The rest of the farmer journey does not exist.
-**Depends on:** WP-02, WP-03, WP-08 (invoice/evidence files), WP-05 (returns), WP-06 (push).
-**Estimate:** 6–8 weeks.
-
-### Build, in this order
-
-1. **Auth.** Phone entry → OTP request → OTP verify → token storage in `flutter_secure_storage` → silent refresh via interceptor → logout. Handle OTP resend cooldown, attempt limits and the rate-limit 429 gracefully.
-2. **Farmer profile + farm/crop profile.** Name, language preference, farm details, crops, acreage. Backed by `PUT /farmers/me/profile`. **Note:** farm and crop profile fields may need to be added to `FarmerProfile` — check the schema and add a migration if so.
-3. **Address management.** List, add, edit, set default; **pincode/location detection** via device GPS with a manual fallback. Serviceability is driven by pincode, so this gates everything commercial.
-4. **Discovery upgrades.** Crop-wise and problem-wise browsing (§9) in addition to the existing category/brand/search. Check whether the marketplace API exposes crop and problem filters — if not, extend it.
-5. **Product detail.** Variants, seller/distributor identity, fulfilment mode, delivery SLA, availability, images (WP-08).
-6. **Cart → checkout → payment** against the real provider (WP-07), with a proper payment-pending/success/failure state machine that **never trusts the client redirect**.
-7. **Order list and tracking.** Full status timeline mirroring `ProductOrderStatusHistory`, per child order, showing the distributor as seller.
-8. **Invoice download** (needs the PDF from WP-15).
-9. **Cancellation** — promote the existing preview screen to the real flow.
-10. **Return request** — reason selection, item selection, photo evidence upload, status tracking (WP-05, WP-08).
-11. **Refund tracking.**
-12. **Support tickets** — create with category and evidence, view thread, reopen.
-13. **Product reviews** — see WP-15 note; needs a new backend model.
-14. **Push notifications** — FCM registration, token upload, deep links into the relevant order/return/ticket.
-15. **WhatsApp and phone support access** (§4.1) — simple launcher links to the support number.
-16. **Slow-network handling** (§24) — request timeouts, retry, cached last-good product list, clear offline state.
-17. **Accessibility** (§24) — tap targets ≥ 48dp, semantic labels, readable type scale, simple inline form errors.
-
-### Acceptance criteria
-- A farmer registers with a real OTP, sets an address, browses by pincode, orders, pays in sandbox, tracks to delivery, downloads the invoice, requests a return, tracks the refund and raises a support ticket — entirely on the device.
-- No hardcoded strings; app runs fully in Hindi (WP-11).
-- No financial amount is computed on the device — every total comes from the API.
-- The app behaves sanely on a throttled 2G connection.
-
----
-
-## WP-11 — Internationalisation (English + Hindi)
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §24 requires English and Hindi from MVP, and no user-facing string hardcoded in a component. Today there are `en`/`hi` string maps in Flutter with no locale machinery, and an English-only portal.
-**Depends on:** WP-02.
-**Estimate:** 1.5 weeks (plus translation turnaround).
-
-### Build
-
-1. **Flutter:** migrate `app_strings.dart` to `flutter_localizations` + `intl` with ARB files (`app_en.arb`, `app_hi.arb`). Add device-locale detection, an in-app language switcher, and persistence of the choice. Handle Devanagari text metrics — check line heights and truncation on small screens.
-2. **Business portal:** `next-intl` (or equivalent) with `en`/`hi` message catalogues; migrate `portal-copy.ts`. Portal Hindi is lower priority than app Hindi — distributors and ops are more likely to work in English — but the machinery should exist.
-3. **Backend:** user-facing message strings in notifications must be template-driven per locale (WP-06). API **error codes** stay locale-independent — clients map codes to localised messages. Do not translate `ApiErrorCode` values.
-4. **Locale on the user record:** persist a preferred locale per user and use it for notification template selection.
-5. **Process:** a script that lists untranslated keys; CI fails if `app_hi.arb` is missing keys present in `app_en.arb`.
-6. Get real Hindi translations from a human familiar with agricultural terminology. Machine-translated agri-input terminology will be wrong in ways farmers notice — pesticide, seed and fertiliser terms are highly regional.
-
-### Acceptance criteria
-- Both apps run fully in Hindi with no English leakage in user-facing text.
-- Language switch persists across restarts.
-- CI catches a missing translation key.
-- Notifications arrive in the recipient's preferred language.
-
----
----
-
-# STAGE 4 — PARTNER APP AND SERVICE MARKETPLACE
-
----
-
-## WP-12 — Partner app shell and delivery-partner workflow
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §4.2. The partner app is a static screen with three role tiles. Start with the delivery partner because **the backend already supports it** — assignment, out-for-delivery and OTP completion all exist and are test-covered.
-**Depends on:** WP-02, WP-03, WP-06, WP-08.
-**Estimate:** 4–5 weeks.
-
-### Build
-
-**Shell (do this once, all three roles depend on it):**
-- Auth reusing the same OTP flow as the farmer app.
-- **Role-based routing after login.** One app, interfaces determined by the logged-in role (`AGENTS.md` §5). A user with multiple partner roles picks a context, mirroring `/auth/select-organisation`.
-- Shared KYC submission flow (documents via WP-08), bank/payout details via the existing `PUT /payouts/accounts/me`, earnings/statement screens via `GET /payouts/statements/me`. All three roles share these — build them once.
-- Push registration, i18n, offline-tolerant HTTP.
-
-**Delivery partner:**
-1. Availability toggle (online/offline) — needs a new field on the user/partner profile plus an endpoint.
-2. Assignment inbox from the existing delivery-assignment APIs; accept/reject pickup.
-3. Pickup proof + **package QR scan** — needs a QR/barcode payload on the dispatch record; add it.
-4. Navigation handoff to Google Maps with the delivery address.
-5. Masked farmer calling (use a call-masking provider, or plain `tel:` for the pilot).
-6. **Delivery OTP entry** — hits the existing `POST /fulfilment/orders/:orderId/deliver`.
-7. **Geotagged proof of delivery** — capture lat/long + photo. Needs new fields on `ProductDeliveryAssignment` (`proofLatitude`, `proofLongitude`, `proofCapturedAt`, `proofStoredFileId`) and a migration. Handle location-permission denial explicitly.
-8. **Failed delivery** — reason codes, retry scheduling, and the `DELIVERY_FAILED` status (declared in the enum, currently unreachable — same problem as the return statuses).
-9. **Return pickup** — consumes the WP-05 return pickup flow.
-10. **COD ledger** where enabled — cash collected, remittance tracking, reconciliation against settlements. Confirm with the business whether COD is in pilot scope before building this; it is significant work.
-11. Earnings and payout statements.
-
-### Acceptance criteria
-- One binary; a promoter and a delivery partner logging in see different interfaces.
-- A delivery partner completes a real delivery on a device: accept → scan → navigate → OTP → geotagged proof → `DELIVERED`.
-- Failed delivery produces `DELIVERY_FAILED` with a reason and a retry path.
-- Location-permission denial degrades gracefully rather than blocking delivery.
-- KYC, payout account and earnings screens work for all three partner roles.
-
----
-
-## WP-13 — Promoter field operations
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §4.2 and §16. Only promoter *attribution* exists. Field operations — the actual daily job of a promoter — do not.
-**Depends on:** WP-12 (shell).
-**Estimate:** 3–4 weeks.
-
-### Build
-
-**Schema:** `Territory` (pincodes/districts, assigned promoters), `FarmerLead` (contact, source, status `NEW`→`CONTACTED`→`CONVERTED`/`LOST`, assigned promoter), `CropSurvey` (farmer, crops, acreage, season, notes), `VisitRecord` (promoter, farmer/lead, purpose, notes, geolocation, timestamp, evidence), `AttendanceRecord` (promoter, check-in/out with geolocation — **only where authorised**), `PromoterTarget` (period, metric, target, achieved), `TrainingMaterial` (title, category, file, locale).
-
-**Endpoints:** CRUD + list under `/promoters/territories`, `/promoters/leads`, `/promoters/surveys`, `/promoters/visits`, `/promoters/attendance`, `/promoters/targets`, `/promoters/training-materials`. All scoped to the promoter's own records except for ops/admin roles.
-
-**App screens:** territory view, lead capture and pipeline, farmer onboarding (create a farmer user + profile on the farmer's behalf), crop/acreage survey, **assisted ordering** (place an order for a farmer with the promoter's attribution code attached — reuses the existing attribution API), visit logging with geotag, attendance check-in/out, daily targets dashboard, commission statement (existing finance APIs), payout statement (existing payouts API), training material library, complaint escalation (existing support API).
-
-**Privacy note:** geotagged attendance is employee location tracking. `PRODUCT_REQUIREMENTS.md` says "where authorised" — get explicit written consent, make it opt-in, capture location only during an active check-in, and document it in `docs/SECURITY_AND_COMPLIANCE.md`. Do not track continuously in the background.
-
-### Acceptance criteria
-- A promoter captures a lead, converts it to a registered farmer, records a crop survey, places an assisted order that carries their attribution, and sees the resulting commission in their statement.
-- Attribution rules from `AGENTS.md` §2.14 hold: only one primary attribution earns standard commission.
-- Attendance is opt-in and only captured during check-in.
-
----
-
-## WP-14 — Service marketplace
-
-**Why:** `PRODUCT_REQUIREMENTS.md` §19, Phase 6. Entirely unbuilt. `OrderType.SERVICE_ORDER` and the `SERVICE_PROVIDER` role/org type exist as enum values with no implementation behind them.
-**Depends on:** WP-12 (shell), WP-07 (payments), WP-08 (evidence files).
-**Estimate:** 6–8 weeks. This is effectively a second marketplace.
-
-### Critical constraint
-`AGENTS.md` §3: **do not combine product inventory and service availability into the same database model.** Services use separate availability, pricing and lifecycle models. Do not try to reuse `DistributorOffer` or `ProductOrder`.
-
-### Build
-
-**Schema:**
-```prisma
-model ServiceProviderProfile   // org-linked; licences, equipment, experience, ratings aggregate
-model ServiceCategory          // DRONE_SPRAYING, SOIL_TESTING, FARM_MACHINERY,
-                               // SEED_TREATMENT, AGRONOMY_VISIT, HARVESTING, TRANSPORTATION
-model ServiceListing           // provider's offering: category, description, pricing model
-                               // (per acre / per hour / flat), price paise, min charge,
-                               // status lifecycle mirroring DistributorOffer approval
-model ServiceArea              // listing ↔ serviceable pincodes
-model ServiceAvailabilitySlot  // date, start, end, capacity, booked count
-model ServiceBooking           // farmer, listing, provider, address/farm location,
-                               // scheduled slot, acreage, quoted/final amount paise,
-                               // status (the §19 lifecycle), completion OTP hash+salt,
-                               // idempotency key
-model ServiceBookingEvidence   // BEFORE / AFTER / DOCUMENT, via StoredFile
-model ServiceBookingStatusHistory
-model ServiceReview            // farmer rating + comment, moderated
-```
-
-**Booking lifecycle** — exactly as specified in §19, no shortcuts:
-`REQUESTED` → `QUOTED` → `ACCEPTED` → `SCHEDULED` → `PROVIDER_EN_ROUTE` → `IN_PROGRESS` → `COMPLETED` → `FARMER_CONFIRMED` → `CLOSED`, with `CANCELLED`, `DISPUTED` and `REFUNDED` as exits. Every transition writes status history and an audit record — same discipline as the product order state machine, which is a good template to copy.
-
-**Endpoints:** provider profile and listing CRUD + approval review (mirror the offer review pattern), availability calendar management, public service discovery by pincode + category, farmer booking create (idempotent) / list / detail / cancel, provider accept/reject/quote/schedule/en-route/start/complete-with-OTP, farmer confirm, review submission.
-
-**Finance:** service bookings need their own commission treatment. Extend `CommissionRule` with an applicability dimension for service categories, and add `SERVICE_COMMISSION` / `SERVICE_PROVIDER_PAYABLE` to `FinancialLedgerEntryType`. **Do not** reuse product commission rules blindly — service margins differ. Payouts flow through the existing `PayoutAccount` machinery.
-
-**Partner app (service provider role):** profile, licences, equipment, service catalogue, pricing, serviceable areas, availability calendar, booking inbox with accept/reject, farmer contact + farm location, before-service evidence, completion evidence, acreage confirmation, completion OTP entry, ratings, earnings.
-
-**Farmer app:** service browsing by category and pincode, provider detail with ratings, slot selection, booking request, quote acceptance, tracking, completion confirmation, review.
-
-### Acceptance criteria
-- A service provider is onboarded and approved, publishes an approved listing with availability, a farmer books a slot, the provider accepts and quotes, the farmer pays, the provider completes with evidence and OTP, the farmer confirms, commission and payable are calculated, and the farmer reviews — end to end.
-- No product inventory model is touched by any service code path.
-- Service commission is calculated by a service-specific rule.
-- Full status history and audit on every transition.
-- Integration test `test/integration/service-marketplace.spec.ts` covering the whole lifecycle plus cancellation and dispute paths.
-
----
----
-
-# STAGE 5 — PRODUCTION READINESS
-
----
-
-## WP-15 — GST, invoice PDFs and the allocation engine
-
-**Why:** Three specific product gaps that block real commercial operation.
-**Depends on:** WP-08 (storage for PDFs).
-**Estimate:** 3–4 weeks.
-
-### 15A — GST and tax modelling
-
-`PRODUCT_REQUIREMENTS.md` §14 defers GST breakup, but **no invoice can legally issue in India without it.** Agricultural inputs span multiple GST slabs (many fertilisers 5%, pesticides 18%, some seeds exempt) — this is not a single-rate problem.
-
-- Add to `ProductVariant`: `hsnCode`, `gstRateBps`.
-- Add to `Organisation`/`DistributorProfile`: verified `gstin`, registered state code.
-- Add to `FarmerAddress`: state code for place-of-supply determination.
+- Add `hsnCode` and `gstRateBps` to `ProductVariant`.
+- Add verified `gstin` and registered state code to `Organisation`/`DistributorProfile`.
+- Add a state code to `FarmerAddress` for place-of-supply determination.
 - Invoice generation computes CGST + SGST (intra-state) or IGST (inter-state) **per line**, in paise, rounding per GST rules (round each line, then total — confirm with the accountant, not with intuition).
-- Extend the `ProductInvoice` snapshot with the tax breakup and an official sequential invoice number **per distributor per financial year** (GST requires an unbroken series — use a DB sequence per distributor, not a random string; the current `generateSettlementNumber`-style approach is not compliant for invoices).
+- Extend the `ProductInvoice` snapshot with the tax breakup and an official **sequential invoice number per distributor per financial year**. GST requires an unbroken series — use a DB sequence per distributor. The current random-string approach is not compliant.
 - Show tax-inclusive pricing to farmers and the breakup on the invoice.
 - **Have a chartered accountant review this before go-live.** Do not ship a tax implementation on developer judgement alone.
 
-### 15B — Invoice PDF generation
+**15B — Invoice PDF generation.**
 
-- A queue job (WP-04) renders the invoice snapshot to PDF and stores it via WP-08.
-- Template with distributor legal name, GSTIN, address, farmer details, line items with HSN and tax breakup, totals in words, invoice number and date.
-- `GET /orders/:orderId/invoice/pdf` returns a short-lived signed URL, permission-checked and audited.
-- Farmer app download; portal download.
-- Credit notes for refunds/returns follow the same pipeline (GST requires a credit note, not a deleted invoice).
+**Delivered engineering slice:** invoice creation idempotently queues one durable `ProductInvoiceDocument`; the worker renders immutable tax snapshots with an embedded Devanagari-capable OFL font, writes a private checksum-bearing PDF through the storage provider, and exposes seller/farmer status plus audited signed-download endpoints. Succeeded return refunds issue one sequential GST `CreditNote`, preserving accepted-item tax, the net farmer refund and subsidy reversal separately, through the same private queued PDF pattern. Stable job IDs, retry state and five-minute recovery sweeps protect database/Redis hand-offs and interrupted workers. Farmer and portal invoice/credit-note downloads are wired; CA template/tax approval remains outstanding.
 
-### 15C — Distributor allocation engine
+- A WP-04 queue job renders the invoice snapshot to PDF and stores it via WP-08.
+- Template with distributor legal name, GSTIN, address, farmer details, line items with HSN and tax breakup, totals in words, invoice number and date. **Hindi rendering requires a Devanagari-capable embedded font** — verify this early, it is a common late-stage surprise.
+- `GET /orders/:orderId/invoice/pdf/download` returns a short-lived signed URL, permission-checked and audited.
+- Farmer and portal invoice download are delivered.
+- Succeeded accepted-return refunds follow the same pipeline through a separately numbered credit note; the original GST invoice remains immutable.
 
-`PRODUCT_REQUIREMENTS.md` §10 specifies a ranked allocation that does not exist. Today checkout simply groups by the distributor of the offer the farmer picked, and **no allocation reason is recorded anywhere.**
-
-Implement `src/checkout/allocation.service.ts`:
-1. Exclude ineligible offers (unapproved, paused, archived, out of stock, non-serviceable pincode, suspended distributor).
-2. Prefer available local inventory.
-3. Prefer fewer child orders where commercially reasonable.
-4. Consider delivery SLA.
-5. Consider total payable amount.
-6. Consider distributor operating status.
-7. **Record the allocation reason** — add `allocationReason` (structured JSON: candidates considered, scores, chosen offer, rule version) to `ProductOrder`. This is explicitly required and is what makes allocation auditable and tunable.
-
-Make the strategy pluggable and version it, so the ranking can change without rewriting checkout. Keep the current "farmer explicitly chose this offer" path as an override — respect an explicit farmer choice and record that as the reason.
-
-### Acceptance criteria
-- An invoice shows correct CGST/SGST or IGST per line for a mixed-slab cart, with correct place-of-supply.
-- Invoice numbers are sequential and unbroken per distributor per financial year.
-- A farmer downloads a correctly formatted PDF invoice from the app.
-- A refund produces a credit note.
-- Allocation records a structured, inspectable reason for every child order.
-- CA sign-off on the tax calculation is documented.
+**Acceptance:** engineering tests cover mixed-slab inclusive CGST/SGST and IGST calculation, place-of-supply inputs, line reconciliation, transactional per-seller/FY numbering, refund credit-note rendering and signed URL validation. Engineering is complete; legal production readiness still requires CA sign-off.
 
 ---
 
-## WP-16 — Infrastructure, observability and go-live
+### WP-09r — Business portal: the remaining surfaces — most of this delivered 2026-08-19
 
-**Why:** `infrastructure/` contains three README placeholders. There is no deployment path at all.
-**Depends on:** everything.
-**Estimate:** 3–4 weeks, run partly in parallel with Stage 4.
+**Why:** The portal now covers most operational work, but several backend modules still have no UI, and the home page — the first thing anyone sees — does not use the dashboards API that exists.
+**Depends on:** WP-04 (`/admin/jobs`) — delivered; WP-08 (evidence viewing) — not required for what shipped here.
+**Estimate:** 2–3 weeks. **Done in one session** except the retrofit item noted below.
 
-### Build
+#### Delivered 2026-08-19
 
-1. **Containerisation.** Multi-stage `Dockerfile` for the API (build → prune → slim runtime, non-root user), one for the worker (same image, different command), one for `business-web`. Health checks in the image.
-2. **Environments.** `local`, `staging`, `production`. Managed Postgres with automated backups and PITR; managed Redis; object storage. Pick a host the team can actually operate (AWS/GCP or a simpler PaaS — for a pilot, simpler is better).
-3. **Deployment pipeline.** GitHub Actions: on merge to `main` → build images → run `prisma migrate deploy` → deploy API + worker + web → smoke test → automatic rollback on failure. **Migrations must run as a separate, gated step** — never on app boot.
+**The highest-impact change:** the portal home (`src/app/page.tsx`) now calls `GET /dashboards/summary` and renders every permission-scoped item the backend returns, grouped `Platform` / `Your organisation` / `Your work`, each linking to its filtered work queue where a matching route exists. The former home content (the onboarding queue) moved to its own `/onboarding` route rather than being lost, matching the pattern every other feature area already follows. The dead `role-dashboard.tsx` — which rendered hardcoded copy from `portal-copy.ts` that never reflected real data — is deleted. `GET /dashboards/summary/export` is wired through a `/dashboard-export` route handler that streams a CSV with a real `Content-Disposition` header; verified live that it writes the backend's `DASHBOARD_EXPORTED` audit record.
+
+Every route in the original table is built and DB-verified live in a real browser session against seeded demo data (login, dashboard, all list/detail pages, a full create → verify mutation cycle with masked account numbers, a confirm-dialog destructive action, and the audit trail every mutation left):
+
+| Route                                                | Contents                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/payouts/accounts` + `/payouts/accounts/[userId]`   | Admin verification queue, status filter, verify/reject with a required rejection reason.                                                                                                                                                                                                                          |
+| `/payouts/statements`                                | Self-service page for whoever is logged in: own bank-account submit/edit form plus own commission statement. There is no admin "view any partner's statement" endpoint on the backend (only `GET /payouts/statements/me`), so unlike `/payouts/accounts` this route cannot take a `userId` and never invents one. |
+| `/notifications`                                     | Delivery log with channel/status filters and a retry action for `FAILED` rows, gated on `notifications:manage`.                                                                                                                                                                                                   |
+| `/tally` + `/tally/[id]`                             | Reconciliation summary, sync-record list with type/status filters, attempt history and a manual sync-outcome form.                                                                                                                                                                                                |
+| `/organisations` + `/organisations/[organisationId]` | Directory with type/status/search filters, profile edit, and **membership** suspend/reactivate — deliberately not an organisation-level suspend, because the backend has no such endpoint (status changes at that level only happen through the onboarding review decision).                                      |
+| `/users` + `/users/[userId]`                         | Search, creation, profile edit and status change, cross-linked to each membership's organisation page.                                                                                                                                                                                                            |
+| `/disputes` + `/disputes/[disputeId]`                | Full lifecycle: assign, add note, request info from farmer/distributor, resolve with a farmer-award amount, close — each gated on the matching `disputes:manage`/`disputes:resolve` permission.                                                                                                                   |
+| `/admin/jobs`                                        | Queue depths, the scheduled-maintenance job list, and a dead-letter browser with a per-queue retry action.                                                                                                                                                                                                        |
+
+**Cross-cutting components**, used throughout every route above: `DataTable` (column-configured, with a built-in empty state), `Pagination` (URL-driven, no client state), `StatusBadge`, `EmptyState`, and `ConfirmSubmitButton` — the portal's first client component, wrapping a submit button in a native `confirm()` so a misclick can't fire a destructive action; it degrades safely without JavaScript since the form still submits. Root-level `loading.tsx`, `error.tsx` and `not-found.tsx` now exist, so a slow fetch, a thrown error or a bad ID no longer produce a blank or unstyled screen anywhere in the app.
+
+**Eleven things worth knowing:**
+
+1. **Partially retrofitted.** Onboarding, Orders, Offers, Catalogue, Inventory, Advisory, Kisan Club Members, Kisan Club Fulfilment, Kisan Club Intelligence and Finance Settlements use shared empty, status and pagination components while retaining their operational card layouts. Club Members and Fulfilment keep their 25-row backend page sizes; membership links preserve search/status and fulfilment links preserve status/promoter/membership/order filters. Club Intelligence uses shared tables for complete crop aggregates and paged promoter performance, preserves all eight filters, and retains explicit page-scoped promoter metric labels. Club Commercial now uses shared error/no-result/status presentation and confirms all programme and platform-funded benefit create/update operations; its programme feed remains unpaged because the same result populates required benefit selectors. Club Network likewise uses shared error/no-result/status presentation and confirms territory plus promoter-profile changes; its territory feed remains unpaged because those results populate required promoter territory selectors. Onboarding, Catalogue, Offer and Warehouse detail histories, Warehouse batches/movements, Offer linked inventory, Catalogue variants, User and Organisation memberships, Order items/history, Return items/inspection/history, the Dispute timeline, Admin queue depths/schedules/dead letters, Audit, Support, Finance Ledger, Finance Commissions, Settlement commission entries, Tally reconciliation/attempts, the Inventory batch snapshot and Inventory Ageing use the shared data table. Organisation detail now confirms profile edits and membership creation and fixes the previous UI permission coupling: `memberships:create` exposes only creation, while `memberships:update:any` exposes only suspend/reactivate controls. Admin Jobs now has explicit empty states for queue and scheduled-job datasets while retaining permission-gated, confirmed dead-letter replay. User detail retains user-update permissions/confirmation and links each membership to its organisation-scoped management workflow. The Tally queue now surfaces reconciliation API failures instead of silently hiding them and formats both aggregate and record amounts as locale-safe INR from backend paise. Order detail uses shared API-error/status presentation and confirms all nine fulfilment transitions from distributor acceptance/rejection through OTP-gated delivery completion; invoice PDF download remains read-only and confirmation-free. Return detail uses shared API-error/status presentation, explicit empty histories and confirmations across approval/rejection, pickup assignment/receipt, batch inspection and refund initiation/mock completion; credit-note download remains read-only. Dispute detail now uses a shared event table, confirms assignment, note, information-request, resolution and closure mutations, and accepts validated whole-paise farmer awards instead of performing floating-point rupee conversion in the portal; backend resolution and ledger validation remain authoritative. Club membership detail uses shared error/status presentation and adds a confirmation dialog on top of its existing manage permission, required reason and explicit suspension checkbox. Club fulfilment detail uses shared error/status presentation, an explicit empty timeline and confirmations for every coordination transition plus operations-only reassignment, without widening own-scope permissions. Settlement detail also uses shared API-error and status presentation, including explicit provisional/final/reversed commission-entry tones. Support ticket detail uses shared API-error/status presentation and confirms assignment plus every waiting, resume, escalation, resolution, close and reopen transition. Tally detail now shows an explicit empty attempt history, outcome badges, locale-safe INR display from backend paise and confirmation before recording a manual sync result. Converted areas preserve active filters or related-dataset positions in pagination links; Warehouse detail independently tracks `batchPage`, `movementPage` and `auditPage`. Its page-derived stock metrics are explicitly labelled "in view" rather than being presented as warehouse-wide totals. Advisory detail now uses shared error/status presentation and confirms submit/review/archive operations. Advisory, Support, Finance Ledger and Commissions validate URL enum filters. Audit renders system-generated events as `System`; catalogue, organisation, KYC, offer, advisory and commission decisions require explicit confirmation; all financial amounts remain backend-provided paise values. Kisan Club Network and Commercial pagination remain intentionally deferred until complete territory- and programme-options APIs separate selector data from paged management cards.
+2. **Route-scoped `loading.tsx`/`error.tsx`** now cover Orders, Returns, Disputes and Notifications with contextual retry/back navigation and safe error references. The root boundary continues to cover every other route.
+
+3. **Payout workflow hardened.** Reviewer verification and rejection failures now return to the user-keyed payout-account detail route rather than incorrectly treating the account record ID as a user ID, and the correct detail cache is revalidated after a decision. Self-service bank-detail submissions require confirmation, explicitly warning that a resubmission returns the account to pending verification. Payout statement amounts use a tested locale-safe INR formatter over backend-provided integer paise; the portal does not calculate commissions or payout eligibility.
+
+4. **Notification retry workflow hardened.** Retrying a failed notification now requires explicit confirmation and preserves the operator's validated status, channel and page state across both success and backend-error redirects. Malformed enum and page values are discarded by a tested route-state boundary rather than being reflected into the redirect. The backend `notifications:manage` permission check and asynchronous delivery queue remain authoritative.
+
+5. **Finance overview and commissions are least-privilege scoped.** The overview fetches, counts and links only commission-rule, commission-entry, ledger and settlement datasets the active session may read; an unavailable API is labelled unavailable rather than represented as a zero count. The commissions surface independently fetches and renders rules and entries, so holding one read permission no longer causes a forbidden request to the other endpoint. Creating an active commission rule now requires explicit confirmation. Backend permissions and all finance calculations remain authoritative.
+
+6. **Finance mutations preserve validated queue context.** Commission-rule creation, eligible-entry finalisation and order-entry reversal return to the operator's validated entry status plus independent rules/entries pages on success or failure. Settlement creation requires confirmation and preserves the current seller/page filter. Shared route-state parsing rejects malformed enum and page values, and commission-rule input accepts only whole decimal BPS from 0 through 10,000 instead of permissive partial integer parsing. Successful finance mutations revalidate their overview and affected ledgers; backend UUID, eligibility, ledger and settlement checks remain authoritative.
+
+7. **Portal-side ledger arithmetic removed.** The ledger no longer sums the current page's signed entries into a frontend-derived financial “net”. Until the backend contract exposes an authoritative aggregate, its metrics are limited to the backend-reported matching-entry count and the non-financial row count for the current page. Ledger, settlement-list and settlement-detail amounts now share the tested locale-safe INR renderer over backend-provided integer paise, including negative ledger movements.
+
+8. **Order-queue financial arithmetic removed.** The fulfilment queue no longer sums page subtotals into a portal-derived order value. It shows the backend-reported matching-order count plus tested, explicitly page-scoped seller-action and item counts, while each order's backend-provided subtotal remains visible through the shared INR formatter. `READY_FOR_PICKUP` and `OUT_FOR_DELIVERY` are no longer incorrectly counted as awaiting seller action, and malformed page values fall back safely to page one.
+
+9. **Kisan Club commercial numeric inputs are strict.** Programme priority and benefit-rule paise, BPS, quantity and usage-limit fields now pass through a tested decimal-integer parser with the backend DTO's applicable bounds. Partial strings, fractions, exponent notation, unsafe integers and out-of-range values are rejected before an API call, independently of browser validation; numeric controls also declare whole-number steps. The API remains authoritative for programme state transitions, benefit-type field consistency, eligibility, calculations and post-redemption financial locks.
+
+10. **Promoter capacity and advisory day inputs are strict.** Kisan Club promoter capacity now uses the same tested decimal-integer parser with the backend's 1 through 10,000 bound, while advisory minimum and maximum days after sowing use its 0 through 1,000 bounds. The forms declare whole-number steps, and partial strings, fractions, exponent notation, unsafe integers and out-of-range values are rejected before an API call. The backend remains authoritative for current assignment capacity, the advisory minimum/maximum relationship and the review lifecycle.
+
+11. **Return inspection quantities are strict.** Batch-disposition quantities now pass through the tested whole-number boundary before an inspection API call. Blank and zero controls remain omitted, while partial strings, fractions, exponent notation, negative values and unsafe integers produce a visible action error instead of being silently discarded or coerced. The backend remains authoritative for exact returned-unit allocation, original reservation limits, inventory movements and the approved refund amount.
+
+**Acceptance, verified live against seeded demo data, not just typechecked:** portal home shows live permission-scoped counts that update after a mutation; a `SUPER_ADMIN` session reaches every route; direct navigation to a route without the matching permission is blocked by `canAccessPortalPath`; the CSV export writes an audit record (`Dashboard Exported`, confirmed in `/audit`); a full payout-account submit → admin-verify cycle round-trips correctly with the backend's masked account number (`********6789`) surviving the redirect-and-refetch.
+
+---
+
+### WP-16 — Infrastructure, observability and go-live — items 1 and 6 delivered 2026-08-19
+
+**Why:** there was no deployment path at all. Items 1 (containerisation) and 6 (API hardening) are now done; everything else in this package still stands, and most of it is gated on the hosting decision rather than on engineering.
+**Depends on:** the packages above; start the environment and pipeline slices in parallel with WP-07.
+**Estimate:** 3–4 weeks (roughly 3 remaining).
+
+#### Delivered 2026-08-19
+
+**Containerisation (item 1).** `apps/marketplace-api/Dockerfile` is a four-stage build: `deps` → `build` → `runtime`, plus a `migrator` stage that keeps the Prisma CLI. The API and worker ship from the **same** `runtime` image and differ only in entrypoint, so they cannot drift apart in dependencies while sharing a database and job payload format. The image runs as the unprivileged `node` user and carries a liveness `HEALTHCHECK`; readiness (`/health/ready`, which checks Postgres, Redis and the queues) is left to the orchestrator, because a briefly unreachable dependency should divert traffic rather than kill the container. `docker-compose.yml` keeps its previous default — datastores only, application on the host with hot reload — and adds opt-in `app` and `migrate` profiles. A CI job builds both images, applies migrations from the migrator, starts the container, waits on readiness and asserts a clean SIGTERM exit, so the Dockerfile cannot silently rot.
+
+**Two traps worth knowing.** The build initially failed with 32 unrelated-looking TypeScript errors (ES5 target, missing `esModuleInterop`) because the image never copied the root `tsconfig.base.json` that the API's tsconfig extends — TypeScript falls back to its own defaults rather than reporting the missing file. And migrations are a **separate one-shot image**, never a boot step: concurrent replicas would race on `migrate deploy`, and a failed migration should stop a rollout rather than crash-loop a container.
+
+**API hardening (item 6).** All four gaps closed. `helmet`; a global rate limit applied through an `APP_GUARD` so a new controller is limited by default rather than by remembering a decorator, with the strict per-route `@Throttle` values (OTP request, payment confirmation, OTP-bearing delivery actions) preserved unchanged; an explicit `REQUEST_BODY_LIMIT_BYTES` ceiling; and graceful shutdown. The throttler configuration was previously declared in **two** feature modules, so which limit a route received depended on which module registered last — it is now declared once in `AppModule`. Covered by `test/integration/api-hardening.spec.ts`.
+
+**Two defects the coverage exposed, both fixed.** `ApiExceptionFilter` only honoured `HttpException`, so `body-parser` rejections — an oversized body, and **malformed JSON on any endpoint** — surfaced as **500s**: a caller's mistake reported as a server fault, with no indication of what to fix and a false signal in error monitoring. And `app.enableShutdownHooks()` installs Nest's own SIGTERM listener, which calls `app.close()`; pairing it with a hand-rolled handler that also calls `app.close()` started two concurrent closes, so roughly **one stop in two exited non-zero** — an orchestrator would record a failed shutdown on ordinary rolling deploys. Signal handling now has a single owner in `src/common/shutdown.ts`, used by both entrypoints and idempotent across repeated signals.
+
+**Known limitation, deliberately not hidden:** the throttler counts **in memory, per process**, so behind N replicas the effective ceiling is N × `RATE_LIMIT_LIMIT`. Acceptable for a single-instance pilot; a shared store is required before scaling the API out, and is listed in item 2 below.
+
+1. ~~**Containerisation.**~~ **Done for the API and worker** (see above). A `business-web` image is still outstanding.
+2. **Environments.** `local`, `staging`, `production`. **Includes a shared rate-limit store** (the throttler is per-process today). Managed Postgres with automated backups and PITR; managed Redis; object storage. Pick a host the team can actually operate — for a pilot, simpler is better.
+3. **Deployment pipeline.** On merge to `main` → build images → run `prisma migrate deploy` → deploy API + worker + web → smoke test → automatic rollback on failure. **Migrations run as a separate gated step, never on app boot.**
 4. **Secrets management.** AWS Secrets Manager / GCP Secret Manager / Doppler. No secrets in env files in production. Document rotation.
-5. **Observability.**
-   - Error tracking: Sentry on API, worker, web and both Flutter apps.
-   - Metrics: request rate, p50/p95/p99 latency per route, error rate, queue depth, job failure rate, DB pool saturation.
-   - Structured logs shipped to a searchable store, with the existing correlation/request IDs preserved end to end.
-   - Alerts: API 5xx rate, p95 latency breaching the §24 targets, queue depth, DLQ non-empty, failed payment webhooks, DB connections, disk.
-   - Uptime checks on `/health` and `/health/ready`.
-6. **Performance validation** against `PRODUCT_REQUIREMENTS.md` §24: reads < 500 ms at pilot load, search < 2 s. Load-test discovery, cart and checkout. Add DB indexes where the query plans demand them — pay particular attention to the marketplace discovery query (pincode + status + availability joins) and the derived-availability computation over `InventoryMovement`, which grows unbounded and will be the first thing to slow down. Consider a materialised availability projection if profiling justifies it.
-7. **Security review.** Dependency audit in CI; rate limiting beyond the auth endpoints (`ThrottlerGuard` currently only covers OTP); CORS lockdown; security headers; SQL-injection review (Prisma covers most, check any raw queries); PII inventory and encryption at rest; penetration test before pilot; verify no secret is in git history.
-8. **Data protection.** Retention policy, farmer data export/deletion process (DPDP Act 2023 applies to Indian personal data), consent capture, privacy policy and terms.
-9. **Backups.** Automated, and a **restore drill actually performed** — an untested backup is not a backup.
-10. **Runbooks** in `docs/`: deploy, rollback, restore, incident response, on-call, common failure modes.
-11. **Pilot seed data.** Real pilot district pincodes, real distributors, real approved catalogue — separate from `seed-demo.ts`, which must stay dev-only (it already refuses to run with `NODE_ENV=production` — keep that).
-12. **Accessibility audit** (§24) on both apps and the portal.
-13. **Go-live checklist:** all mock provider flags flipped and verified (`SMS_PROVIDER`, `WHATSAPP_PROVIDER`, `EMAIL_PROVIDER`, `PAYMENT_PROVIDER`, `TALLY_PROVIDER`, `STORAGE_PROVIDER`, `AUTH_MODE`); `mockOtpCode` confirmed absent from responses; the delivery-OTP mock exposure confirmed removed; `BUSINESS_WEB_MOCK_*` no longer used; the placeholder business values in `.env.example` (`RETURN_WINDOW_DAYS`, `DEFAULT_MARKETPLACE_COMMISSION_BPS`, `DEFAULT_PROMOTER_COMMISSION_BPS`, `SUPPORT_TICKET_DEFAULT_SLA_HOURS`) replaced with business-approved numbers.
+5. **Observability.** Sentry on API, worker, web and both Flutter apps. Metrics: request rate, p50/p95/p99 per route, error rate, queue depth, job failure rate, DB pool saturation. Structured logs shipped to a searchable store with the existing correlation IDs preserved end to end. Alerts on 5xx rate, p95 latency breaching §24, queue depth, non-empty DLQ, failed payment webhooks, DB connections and disk. Uptime checks on `/health` and `/health/ready`.
+6. ~~**API hardening.**~~ **Done** (see above). CORS remains restricted to `CORS_ORIGIN` and Swagger remains disabled in production.
+7. **Performance validation** against §24 (reads < 500 ms, search < 2 s). Load-test discovery, cart and checkout. The schema already carries 217 explicit indexes, which is a good start — pay particular attention to the marketplace discovery query (pincode + status + availability joins) and the derived-availability computation over `InventoryMovement`, which grows unbounded and will be the first thing to slow down. Consider a materialised availability projection if profiling justifies it.
+8. **Security review.** Dependency audit in CI, PII inventory and encryption at rest, penetration test before pilot, and verification that no secret is in git history.
+9. **Data protection.** Retention policy, farmer data export/deletion (DPDP Act 2023 applies), consent capture, privacy policy and terms.
+10. **Backups.** Automated, and a **restore drill actually performed** — an untested backup is not a backup.
+11. **Runbooks** in `docs/`: deploy, rollback, restore, incident response, on-call, common failure modes.
+12. **Pilot seed data.** Real pilot district pincodes, real distributors, real approved catalogue — separate from `seed-demo.ts`, which must stay dev-only.
+13. **Accessibility audit** on both apps and the portal. The farmer app already has automated checks for 48dp targets, contrast and 200% text; real-device TalkBack/VoiceOver remains outstanding.
+14. **Go-live checklist:** every mock provider flag flipped and verified (`SMS_PROVIDER`, `WHATSAPP_PROVIDER`, `EMAIL_PROVIDER`, `PAYMENT_PROVIDER`, `TALLY_PROVIDER`, `STORAGE_PROVIDER`, `AUTH_MODE`); `mockOtpCode` confirmed absent; delivery-OTP mock exposure confirmed absent — as of 2026-08-19 it is gated on `SMS_PROVIDER` being `mock` (it previously had **no gating at all**, and `retryDelivery` is reachable with manage-_own_ authority, so the assigned partner could read the farmer's confirmation code out of the response), which makes this a flag flip rather than a code edit someone must remember. **Note the corollary:** nothing yet sends that OTP to the farmer, so an SMS producer for it must exist _before_ `SMS_PROVIDER` changes or delivery completion becomes impossible; `BUSINESS_WEB_MOCK_*` deleted; and the placeholder business values (`RETURN_WINDOW_DAYS=7`, `DEFAULT_MARKETPLACE_COMMISSION_BPS=500`, `DEFAULT_PROMOTER_COMMISSION_BPS=0`, `SUPPORT_TICKET_DEFAULT_SLA_HOURS=48`) replaced with **business-approved numbers**. Those four are still placeholders and need a signed-off decision before pilot.
 
-### Acceptance criteria
-- A merge to `main` deploys to staging automatically with migrations gated and rollback tested.
-- Production secrets live in a secret manager.
-- Alerts fire on a deliberately induced failure.
-- Load test meets the §24 latency targets.
-- A database restore has been performed successfully in a drill.
-- The go-live checklist is complete and signed off, with **zero mock providers active in production**.
+**Acceptance:** a merge to `main` deploys to staging automatically with gated migrations and tested rollback; production secrets live in a secret manager; alerts fire on an induced failure; load tests meet §24; a restore drill has been performed; the go-live checklist is signed off with **zero mock providers active in production**.
 
 ---
+
+### WP-10r — Farmer app: the remainder
+
+**Why:** ~85% built and genuinely good. What remains is mostly gated on other packages rather than on app work.
+**Depends on:** WP-06 (push) and WP-08 (evidence).
+**Estimate:** 2 weeks after its dependencies land.
+
+1. **Product images** — render real images once WP-08 delivery exists; the `VardhnamImageFrame` placeholder contract is already in place.
+2. **Push notifications** — FCM registration, token upload, deep links into the relevant order/return/ticket.
+3. ~~**Invoice PDF download** — consume the WP-15B signed-URL endpoint.~~ **Delivered 2026-08-20:** Order detail requests generation idempotently, checks durable status, obtains the short-lived authorised URL only when available and opens it through an injectable external launcher.
+4. **Return evidence upload** — photo capture into WP-08.
+5. **Support attachments and conversation replies** — currently correctly shown as unavailable; needs the ticket-message contract.
+6. **Product reviews and ratings** — needs the new backend model (§3 item 9); confirm whether it is in pilot scope.
+7. **Real-device verification** — TalkBack/VoiceOver, throttled 2G behaviour, physical Android device, iOS compilation.
+
 ---
 
-# Summary of remaining effort
+### WP-17 — Farmer app UI blueprint _(new work package)_
 
-| Stage | Work packages | Estimate (1 developer) |
-|---|---|---|
-| 1 — Stabilise | WP-01 … WP-03 | 2–3 weeks |
-| 2 — MVP holes | WP-04 … WP-08 | 8–10 weeks |
-| 3 — Portal + farmer app | WP-09 … WP-11 | 11–14 weeks |
-| 4 — Partner app + services | WP-12 … WP-14 | 13–17 weeks |
-| 5 — Production readiness | WP-15, WP-16 | 6–8 weeks |
-| **Total** | | **≈ 40–52 weeks solo** |
+**Why:** `VARDHNAM_FARMER_UI_CODEX_IMPLEMENTATION.md` (2026-08-17) repositions the farmer app from "generic agriculture marketplace" to "trusted farmer utility": farm first, commerce second. This is a deliberate product direction that did not exist when the previous plan was written, and it needs to be tracked as work rather than living only in a loose root-level document.
+**Depends on:** WP-08 for real imagery.
+**Estimate:** 3–4 weeks.
+**Status: ~65% done.**
 
-With a team of three (backend, frontend/mobile, shared) running stages 3 and 4 in parallel: **≈ 4–5 months** to a pilot-ready product.
+**Already built:** Phase UI-1 in full — `lib/src/app/theme/` with colour, typography, spacing and radius tokens; `VardhnamImageFrame`; 12 shared components (`VardhnamSectionHeader`, `InfoCard`, `ActionCard`, `ErrorState`, `Skeleton`, `StatusChip`, `AlertCard`, `EmptyState`, `PromoterCard`, `ProductCard`, `BottomNavigation`); the home screen partially rebuilt against them with an honest "weather unavailable" card. **Phase UI-2's shell is also done** — see below.
 
-## If the budget only allows a subset
+**Remaining, in blueprint order:**
 
-Ship a **product-only pilot** and defer the service marketplace. Minimum viable path:
+- **UI-2 (shell) — ✅ DONE 2026-08-18.** The five-tab shell is built on `StatefulShellRoute.indexedStack` (`core/widgets/vardhnam_tab_shell.dart`). The bar now persists on every tab instead of being drawn by the dashboard alone, each tab keeps its own navigation stack, and tapping the current tab pops it to its root. Focused tasks — cart, checkout, new return, new support ticket, Club join and profile completion — deliberately push _over_ the shell on the root navigator, so a farmer part-way through paying is not one stray tap from abandoning it. Tab labels moved to dedicated short strings (`shopTabLabel`, `ordersTabLabel`, `accountTabLabel`); the previous labels were "Product browsing" and "Farm profile", which cannot share one row with five destinations, least of all in Devanagari at 200% text.
+  - **Watch for this when touching farmer tests:** the five tab labels now render on _every_ screen, so a bare `find.text('Home')` or `find.text('Orders')` can match both the tab and screen content. Four existing tests needed scoping, and three navigated by tapping the old long nav labels. Scope to `find.descendant(of: find.byType(NavigationBar), ...)` for the tab, or to the screen's own heading for content.
+  - **UI-2 (home) — ✅ DONE 2026-08-18.** `screens/home_sections.dart` adds the three missing modules from blueprint §10.5–10.7: the active crop (with days since sowing, which meant adding `sowingDate` to `FarmCropCycleSummary`), the in-flight order summary, and a real four-product strip with pack shots that replaced the static shop teaser card. **Every module hides itself when it has nothing to say**, so a farmer with no crop and no order in flight sees a short home screen rather than three empty states. `marketplaceProductRepositoryProvider` was added (in `marketplace_providers.dart`, keeping `marketplace_api.dart` free of Flutter) and is overridden by `FarmerApp` so widget tests inject fakes instead of making real HTTP calls.
+  - **Note for anyone adding home modules:** each one fetches from a repository, so any test that pumps the dashboard now needs those repositories stubbed. Without them the providers fall through to real HTTP clients and the test fails on a pending-timer assertion rather than anything informative.
+  - **UI-2 (personalised app bar) — ✅ DONE 2026-08-18.** Home now reads the authenticated farmer profile and greets the farmer by name, shows the default delivery locality and pincode, and opens delivery-address management when the location row is tapped. Profile/address edits invalidate the shared profile snapshot so Home refreshes. Loading or API failure falls back to the existing friendly generic heading instead of blocking the dashboard. Focused tests cover English and Hindi, profile failure, address navigation and a narrow screen at 200% text size.
+- **UI-3 (Kisan Club) — ✅ DONE 2026-08-18 within approved product scope.** The free-programme landing, membership states, benefit history/catalogue and detailed promoter surface remain API-authoritative. The active-member dashboard shows the farmer name, real active crop and first current server-approved advisory, followed by an explicitly human-support crop-problem entry, promoter, Club benefits/products and farms in blueprint order. Join is now one coherent four-step experience: profile-backed location → farm → searchable approved crop with sowing date → review, terms and optional permissions. Server writes occur only after review: membership first, then permissions, farm and crop. If a later farm/crop write fails, the created `PENDING_PROFILE` membership remains valid and the farmer is routed to the existing resumable completion screen rather than creating a duplicate membership. Tests cover success, that partial-failure boundary, module order, English/Hindi and 200% text. **External content gate:** the landing still cannot link to a final legal terms/privacy destination until approved copy and route exist; the app continues to show the existing programme-terms summary without inventing legal text.
+- **UI-4 (Farm + Crop) — ✅ DONE 2026-08-18 within available backend data.** Farms are presented as stacked, agriculture-friendly cards; farm detail separates current and previous crop cycles; add/edit farm and crop flows retain backend validation; and crop summaries show authoritative days since sowing. The crop health dashboard filters approved advisory events by exact crop-cycle ID (never just a crop-name guess), shows current guidance under Today, and renders server-returned upcoming guidance as a simple seven-day vertical timeline. When the backend has no scheduled future event, it keeps the explicit unavailable message rather than inventing a crop plan. Existing crop diary/activity and harvest flows remain reachable. Focused tests cover add/edit, detail navigation, authoritative guidance, the honest empty state, English/Hindi and narrow 200% text.
+- **UI-5 (Advisory + Crop Doctor) — ✅ DONE 2026-08-18 within approved product scope.** Advisory cards highlight new/due-today events and retain server-authored content; detail is action-first, exposes the due date and optional source, and offers promoter/expert contact without inventing severity, confidence or mapped products. The Crop Doctor entry and three-part photo guide are behind `CROP_DOCTOR_SHELL_ENABLED` (off by default). Camera/gallery controls are visibly disabled, the working action routes to human support, and there is no diagnosis result screen. A provider-backed result remains forbidden until an approved backend contract exists under `PRODUCT_REQUIREMENTS.md` §26. Tests cover list/detail, read tracking, the disabled capture boundary, feature-flagged crop entry, English/Hindi and narrow 200% text.
+- **UI-6 (marketplace refresh) — ✅ DONE 2026-08-18.** Shop now exposes the backend-authoritative crop, category and brand vocabularies as scannable filter-chip sections and retains pincode, search, pagination and exact-query offline-cache behaviour. No duplicate “Shop by Need” taxonomy was invented because the API does not provide one. Reusable product cards keep real pack shots, backend price/stock/delivery hints and show the exact **Kisan Club Benefit** badge only for Club programmes returned by the backend. Product detail adds authoritative crop suitability, uses the shared card system for the Club state and seller offers, and keeps the distributor legal seller, GSTIN, delivery SLA, warehouse, batch and invoice responsibility unambiguous. Cart location, seller groups and items now use the same visual system while preserving backend-calculated totals and per-seller child-order boundaries. Pricing, stock validation, offer selection and cart mutations are unchanged. Tests cover filter queries, product cards, Club badge state, seller/invoice disclosure, cart flows, English/Hindi and narrow 200% text.
+- **UI-7 (orders, notifications and account) — ✅ DONE 2026-08-18 within approved routes and backend contracts.** Order history uses scannable status chips backed by the existing server status queries and keeps each seller child order independently identifiable by seller, date, status and total. Notification list and detail share backend-category labels and icons; unread filtering, read tracking and the existing related-resource allowlist are unchanged. Account now leads with a farmer identity summary, groups its existing service destinations, and uses the shared card/status system for profile details and saved addresses. No legal/privacy row was invented because there is no approved destination. No order, notification, profile, address or financial workflow changed.
+- **Weather:** currently an honest unavailable state. Decide whether to integrate a real provider (IMD/OpenWeather) or keep the honest placeholder for pilot. **Do not fabricate weather data.**
+- **Asset library:** §38 of the blueprint lists the required images. Placeholders must stay visibly placeholder until real assets arrive — the existing `VardhnamImageFrame` contract enforces this; keep it.
+- **Golden tests — all seven blueprint key screens covered 2026-08-18; state expansion in progress.** Flutter's built-in comparator covers Home, Kisan Club Join, the active-member Club Dashboard, Crop Detail, Advisory Detail, Shop and Product Detail in English at a standard phone viewport and Hindi at 320dp / 200% text, with fixed local data and committed PNG baselines. Shop captures discovery controls, product results and loading / empty / retryable-network-error states in both locales. Product Detail captures summary, seller/invoice, loading and error states; Advisory Detail captures content, loading and error states. Neither detail route has a valid empty state because a successful response represents one resource. These goldens exposed and fixed three narrow large-text defects: seller identity compression, a non-scrollable Product Detail error and a 246-pixel overflow in the shared error card, whose retry action now stacks on narrow large-text screens. No dependency or golden framework was added. The deterministic Flutter test font protects layout, colour, wrapping and overflow rather than production-font glyph rendering. **Open:** add loading / empty / error goldens to the remaining key screens where those states exist and expand coverage to redesigned secondary screens.
 
-**WP-01, WP-02, WP-03, WP-04, WP-05, WP-06, WP-07, WP-08, WP-09, WP-10, WP-11, WP-15, WP-16** — skip WP-12, WP-13, WP-14.
+**Acceptance:** no raw theme constants in feature screens; every redesigned screen has widget tests for all four states in both locales; golden tests pass; no backend behaviour, pricing or seller-of-record logic changed by any UI commit.
 
-That gives farmers a complete product purchase → delivery → return → refund journey, gives ops and finance a working portal, and is deployable. Delivery partners would be operated through the business portal instead of a dedicated app (the backend fully supports this today), and promoters through assisted ordering in the portal. Roughly **26–34 weeks solo**, or **3 months with a team of three**.
+---
+
+### WP-05r — Returns: provider execution remainder
+
+**Why:** The return/refund/dispute vertical, including scan-gated evidence and dispute adjustment accounting, is built and integration-tested. Production refund execution remains.
+**Depends on:** WP-07 (real refund execution).
+**Estimate:** approximately 1 week after provider onboarding.
+
+- ~~**Disputes backend.**~~ **Delivered 2026-08-18:** farmer/seller creation, scoped queues and detail, assignment, participant notes, information requests, finance-only resolution, immutable adjustment awards, order-state restoration, notifications, closure and audit. The portal `/disputes` surface remains in WP-09r.
+- ~~**Return evidence upload** through WP-08, farmer-side and inspection-side.~~ **Delivered 2026-08-18:** scan-gated `RETURN_EVIDENCE`, farmer/seller/operations scope, signed downloads, retry-safe attachment and audit.
+- ~~**Async refund execution** moved onto the WP-04 queue.~~ **Delivered 2026-08-18:** durable processing event, stable BullMQ job, retry/dead-letter behavior, row-locked idempotent finalisation and scheduled recovery.
+- **Real refund provider** via WP-07, replacing the mock confirm path.
+
+---
+
+### WP-12r / WP-13r — Partner app remainder
+
+**Depends on:** WP-06 (push), WP-08 (KYC, photo proof, visit evidence).
+**Estimate:** 1.5 weeks (WP-12r) + 2 weeks (WP-13r).
+
+**WP-12r (delivery):** shared KYC submission flow for all partner roles; photo proof of delivery (`proofStoredFileId`); push registration; **COD ledger — confirm with the business whether COD is in pilot scope before building it, it is significant work.**
+
+**WP-13r (promoter):** visit evidence upload; consented attendance check-in/out (opt-in, foreground only, documented in `docs/SECURITY_AND_COMPLIANCE.md` — this is employee location tracking and must be treated as such); daily targets dashboard; training material library; assisted-ordering polish.
+
+---
+
+### WP-11r — Portal internationalisation
+
+**Depends on:** nothing.
+**Estimate:** 1 week plus translation turnaround.
+
+Both mobile apps are already 100% bilingual. Remaining:
+
+1. `next-intl` (or equivalent) with `en`/`hi` catalogues in the portal; migrate `portal-copy.ts`.
+2. Persist a preferred locale on the user record and use it for notification template selection (WP-06).
+3. **A CI guard** that fails when `app_hi.arb` is missing a key present in `app_en.arb`, and the same for the portal catalogues. This does not exist today; the current 100% coverage is maintained by discipline alone and will drift without a gate.
+4. Get real Hindi translations from someone familiar with agricultural terminology — machine-translated pesticide, seed and fertiliser terms are wrong in ways farmers notice.
+
+**Note:** API **error codes** stay locale-independent. Clients map codes to localised messages. Do not translate `ApiErrorCode` values.
+
+---
+
+### WP-18 — Technical debt _(new work package)_
+
+**Why:** The codebase is disciplined (zero `any`, zero TODOs) but three structural problems will slow every future package if left alone.
+**Estimate:** 1.5–2 weeks, best done between feature packages rather than deferred indefinitely.
+
+1. **Split `checkout.service.ts`.** At **4,080 lines with 26 public methods** it is the largest file in the repository and handles checkout, order reads, the entire distributor fulfilment state machine, invoicing, delivery assignment, QR pickup, delivery failure/retry and cancellation. Split along the seams that already exist: `CheckoutService`, `OrderQueryService`, `FulfilmentService`, `DeliveryAssignmentService`. Behaviour-preserving refactor with the existing integration tests as the safety net — **do not combine it with a feature change.**
+2. **Resolve the API client duplication.** `packages/api-client` is 3,407 hand-written lines, has drifted (`OrganisationType` still lacks `DELIVERY_PARTNER`), and **nothing imports it** — `business-web` has its own `marketplace-api.ts` and each Flutter app has its own client. Either generate it from OpenAPI and migrate `business-web` onto it, or **delete it and stop pretending it is a shared contract.** The current state is the worst of both. Emit `openapi.json` from the existing Swagger document via a script, commit it, and add a CI drift check either way.
+3. **`packages/design-tokens` is 27 lines, declared as a `business-web` dependency, and imported by nothing** — the portal duplicates the same values as CSS variables in `globals.css`. Either use it or remove it.
+4. **Backfill the last API contract gaps:** `/tally`, `/dashboards` and `/promoter-visits` are the only endpoint groups missing from `docs/API_CONTRACTS.md`.
+5. **Refresh the stale docs.** `docs/HANDOVER.md` §9's completion table (backend 85%, portal 50%, farmer app 35%, partner app 10%, overall 45–50%) is now badly out of date — see §6 below for current figures. `docs/DEVELOPMENT_ROADMAP.md` remains a useful build log but should carry a pointer to this edition.
+
+---
+
+### WP-14 — Service marketplace _(unchanged, and explicitly deferred)_
+
+Entirely unbuilt: no `ServiceProviderProfile`, no `ServiceCategory`, `ServiceListing`, `ServiceArea`, `ServiceAvailabilitySlot`, `ServiceBooking`, `ServiceBookingEvidence`, `ServiceBookingStatusHistory` or `ServiceReview`. The full specification from the previous edition still stands and is reproduced in `docs/archive/REMAINING_IMPLEMENTATION_PLAN_2026-08-06.md` §WP-14.
+
+**Critical constraint (`AGENTS.md` §3):** do not combine product inventory and service availability into the same database model. Services need separate availability, pricing and lifecycle models. Do not reuse `DistributorOffer` or `ProductOrder`.
+
+**Estimate:** 6–8 weeks. **Recommendation: defer past the product pilot.** It is effectively a second marketplace and nothing in the product journey depends on it.
+
+### WP-15C — Distributor allocation engine _(deferred)_
+
+`PRODUCT_REQUIREMENTS.md` §10 specifies a ranked allocation that does not exist; checkout currently groups by the distributor of the offer the farmer explicitly chose, and no `allocationReason` is recorded. For a single-district pilot with few distributors per pincode, the explicit-choice path is defensible. **Build this when a pincode routinely has three or more competing offers**, and record the structured reason (candidates, scores, chosen offer, rule version) on `ProductOrder` when you do. Full spec in the archived edition §15C.
+
+---
+
+## 6. Revised completion estimate
+
+Replacing the now-stale table in `docs/HANDOVER.md` §9:
+
+| Area                                                 | 2026-08-07      | **2026-08-17 (verified)**                                                                                              |
+| ---------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Backend domain model & business logic (product side) | ~85%            | **~95%**                                                                                                               |
+| Backend — returns/refunds/disputes                   | 0%              | **~96%** (real provider and signed refund-status webhook open)                                                         |
+| Backend — Kisan Club programme                       | _(not tracked)_ | **~95%**                                                                                                               |
+| Backend — service marketplace                        | 0%              | **0%**                                                                                                                 |
+| Backend — real external integrations                 | ~15%            | **~45%** (notification transport built and tested end to end; every provider still mock, and payments/Tally untouched) |
+| Background jobs                                      | 0%              | **~90%** (infrastructure and maintenance jobs done; domain producers arrive with WP-06/07/08)                          |
+| File/document storage                                | 0%              | **~85%** (complete except a cloud provider, pending the hosting decision)                                              |
+| Business web portal                                  | ~50%            | **~65%**                                                                                                               |
+| Farmer mobile app (function)                         | ~35%            | **~85%**                                                                                                               |
+| Farmer mobile app (new UI blueprint)                 | n/a             | **~30%**                                                                                                               |
+| Partner mobile app                                   | ~10%            | **~75%**                                                                                                               |
+| Internationalisation                                 | ~10%            | **~70%** (apps done, portal open)                                                                                      |
+| Infrastructure / deployment / observability          | ~5%             | **~5%**                                                                                                                |
+| Documentation                                        | ~70%            | **~85%**                                                                                                               |
+| **Overall product**                                  | **~45–50%**     | **~70%**                                                                                                               |
+
+**Sequenced effort to a product-only pilot** (skipping WP-14 and WP-15C):
+
+| Order | Package                                | Estimate                                            | Can run in parallel with     |
+| ----- | -------------------------------------- | --------------------------------------------------- | ---------------------------- |
+| 0     | **WP-01r — commit, branch, clean**     | 2–3 days                                            | _nothing — do it first_      |
+| ~~1~~ | ~~WP-04 — background jobs~~            | **DELIVERED 2026-08-17**                            | —                            |
+| ~~1~~ | ~~WP-08 — storage~~                    | **DELIVERED 2026-08-17**                            | —                            |
+| ~~2~~ | ~~WP-06 — notifications + SMS~~        | **DELIVERED 2026-08-18** (real BSP account pending) | —                            |
+| 2     | WP-07 — real gateway adapter remainder | externally blocked + ~1 week after credentials      | WP-15                        |
+| 3     | WP-15A/B — GST + invoice PDF           | 3 weeks                                             | WP-09r                       |
+| 3     | WP-09r — portal remainder              | 2–3 weeks                                           | WP-15                        |
+| 4     | WP-16 — infrastructure and go-live     | 3–4 weeks                                           | start containerisation early |
+| 4     | WP-10r — farmer app remainder          | 2 weeks                                             | WP-16                        |
+| 5     | WP-17 — farmer UI blueprint            | 3–4 weeks                                           | WP-16                        |
+| 5     | WP-05r / WP-12r / WP-13r — remainders  | 4–5 weeks total                                     | each other                   |
+| 6     | WP-11r — portal Hindi                  | 1 week                                              | anything                     |
+| 6     | WP-18 — technical debt                 | 1.5–2 weeks                                         | between packages             |
+
+**Solo:** ≈ 18–23 weeks to pilot.
+**Team of three** (backend / mobile / infra-frontend) with stages 2–5 overlapped: **≈ 8–10 weeks to pilot.**
+
+This is a substantial improvement on the previous edition's 26–34 solo weeks, and it reflects real delivery — not a re-estimate.
+
+### Next package
+
+The provider-neutral **WP-07 payment/webhook foundation and WP-15A/B GST, invoice and credit-note engineering are delivered**, including farmer and portal download flows. The real gateway adapter is blocked on decision 1. The next unblocked work should come from WP-09r quality consolidation or WP-18 contract/client debt. GST classifications and rounding still require the chartered-accountant review in decision 6 before legal documents can be considered production-ready.
+
+**The critical path is now partly out of engineering's hands.** Three of the four remaining pilot blockers are external accounts, not code:
+
+| Blocker                       | What unblocks it                                                                                                                                                                        |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Farmers cannot receive an OTP | An SMS/WhatsApp BSP account (§9 decision 2). The transport is built; only the provider file and credentials are missing. **WhatsApp template pre-registration has weeks of lead time.** |
+| No real money can move        | A payment merchant account (§9 decision 1) — needed before WP-07 can be finished, not after.                                                                                            |
+| No legal invoice can issue    | A chartered accountant for the multi-slab GST review (§9 decision 6).                                                                                                                   |
+| Nothing can be deployed       | A cloud host decision (§9 decision 3), which also selects the storage provider.                                                                                                         |
+
+Every one of these was flagged in revision 1 and none has moved. **Progressing them is now more valuable than more code.**
+
+---
+
+## 7. Verification log for this edition
+
+Every status claim in §1 and §2 traces to one of these:
+
+- `npm run typecheck` — exit 0.
+- `npm run lint` — exit 0.
+- `npm --workspace @vardhnam/marketplace-api run test` — 46 suites, 249 tests, all pass.
+- `npm --workspace @vardhnam/business-web run test` — 10 tests, all pass.
+- `cd apps/farmer-mobile && flutter analyze` — "No issues found!"; `flutter test` — 116 tests pass.
+- `cd apps/partner-mobile && flutter analyze` — clean; `flutter test` — 34 tests pass.
+- `prisma migrate deploy` against `vardhnam_agrotech_test` — all 53 migrations applied.
+- `npm run test:integration` with the root `.env` loaded by the workspace script — **34 suites, 133 tests, exit 0.**
+- `npm --workspace @vardhnam/marketplace-api run build` — exit 0 after WP-15A.
+- `npm run seed:demo` — exit 0 with explicit placeholder HSN/GST classifications.
+- `node dist/src/worker.js` smoke test — worker boots, registers 10 handlers across 4 queues and writes 7 repeatable schedules into Redis.
+- Compiled API smoke with real JWT authentication and the mock SMS transport — health plus farmer profile, farms, Kisan Club membership, marketplace, cart, orders and notifications all returned HTTP 200.
+- Exhaustive greps for `bullmq`, `Processor`, `razorpay`, `webhook`, `@aws-sdk`, `multer`, `S3`, `presigned`, `firebase`, `fcm`, `twilio`, `msg91`, `nodemailer`, `pdfkit`, `puppeteer`, `allocation`, `Dockerfile`, `helmet` across `apps/*/src`, `apps/*/lib` and `packages/*` — **all zero hits** except where noted in §2.
+- Endpoint count by `@Get|@Post|@Patch|@Put|@Delete` across all `*.controller.ts` — 263.
+- ARB key parity computed by parsing all four `.arb` files — 639/639 and 336/336, zero missing.
+- `git status --porcelain` — 355 entries; `git log --oneline` — 2 commits.
+
+Anything not on this list was read directly from the source file it describes.
+
+---
+
+## 8. Definition of Done — unchanged, still non-negotiable
+
+A change is not done until all of the following are true.
+
+- [ ] Business rules honoured — re-read `AGENTS.md` §2 if the change touches money, sellers, invoices or commission.
+- [ ] All money is integer paise, calculated on the backend, inside a transaction where it touches inventory or the ledger.
+- [ ] Every state change writes an `AuditLog` row **in the same transaction**.
+- [ ] Mutating endpoints that can be retried accept and honour an `Idempotency-Key`.
+- [ ] Permissions declared in `permission-codes.ts`, enforced by guards, and ownership (`:own`) re-checked in the service.
+- [ ] Request DTOs validated with `class-validator`; no unvalidated external input reaches a service.
+- [ ] Errors use the standard envelope and a machine-readable `ApiErrorCode`.
+- [ ] Strict TypeScript, no `any`. (Currently at zero — keep it there.)
+- [ ] A Prisma migration is committed; never edit an applied migration.
+- [ ] Docs updated in the same change: `API_CONTRACTS.md` for contract changes, `DATA_MODEL.md` for schema changes, an ADR in `docs/DECISIONS/` for architectural ones.
+- [ ] Tests: unit for logic, integration for anything crossing an HTTP boundary or a transaction, widget/golden for Flutter UI.
+
+---
+
+## 9. Open decisions the business must make
+
+These block work and cannot be resolved by a developer.
+
+| #   | Decision                                               | Blocks        | Notes                                                                                                                                                                                      |
+| --- | ------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Payment provider and merchant account                  | WP-07         | Razorpay / PayU / Cashfree. Sandbox credentials needed before the package can start.                                                                                                       |
+| 2   | SMS + WhatsApp BSP                                     | WP-06         | MSG91 / Gupshup / Karix / Twilio. **WhatsApp template approval has weeks of lead time — start now, before the code.**                                                                      |
+| 3   | Cloud host and object storage                          | WP-08, WP-16  | Determines the storage provider implementation and the whole deployment shape.                                                                                                             |
+| 4   | The four placeholder business values                   | WP-16 go-live | `RETURN_WINDOW_DAYS=7`, `DEFAULT_MARKETPLACE_COMMISSION_BPS=500`, `DEFAULT_PROMOTER_COMMISSION_BPS=0`, `SUPPORT_TICKET_DEFAULT_SLA_HOURS=48` are all still placeholders awaiting sign-off. |
+| 5   | Is COD in pilot scope?                                 | WP-12r        | The COD ledger is significant work. Do not build it speculatively.                                                                                                                         |
+| 6   | Chartered accountant for GST review                    | WP-15A        | Multi-slab agri-input taxation. Engage before the implementation, not after.                                                                                                               |
+| 7   | Are product reviews in pilot scope?                    | WP-10r        | Needs a new backend model plus moderation.                                                                                                                                                 |
+| 8   | Real weather provider, or keep the honest placeholder? | WP-17         | The current "unavailable" card is honest and shippable.                                                                                                                                    |
+| 9   | Pilot district, distributors and catalogue             | WP-16         | Needed for real pilot seed data.                                                                                                                                                           |

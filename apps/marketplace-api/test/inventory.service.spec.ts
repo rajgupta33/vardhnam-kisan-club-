@@ -197,6 +197,33 @@ describe('InventoryService', () => {
     );
   });
 
+  it.each([InventoryMovementType.RETURN_QUARANTINED, InventoryMovementType.RETURN_RESTOCKED])(
+    'rejects workflow-owned %s through manual adjustment',
+    async (movementType) => {
+      const service = new InventoryService(
+        {} as never,
+        { record: jest.fn() } as never,
+        accessService as never,
+      );
+
+      await expect(
+        service.createInventoryAdjustment(
+          '00000000-0000-4000-8000-000000000399',
+          {
+            movementType,
+            quantity: 1,
+            reason: 'Attempted manual return movement',
+          },
+          distributorActor,
+        ),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          message: 'This inventory movement type is created only by its owning workflow',
+        }),
+      });
+    },
+  );
+
   it('rejects stock adjustments that would make a batch balance negative', async () => {
     const batch = batchFixture();
     const tx = {

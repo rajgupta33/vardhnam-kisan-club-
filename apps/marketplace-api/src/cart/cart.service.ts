@@ -23,6 +23,7 @@ import { AuditService, type AuditRecordInput } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
 import { PrismaService } from '../prisma/prisma.service';
+import { KisanClubBenefitService } from '../kisan-club/benefits/kisan-club-benefit.service';
 import type { AddCartItemDto } from './dto/add-cart-item.dto';
 import type { UpdateCartContextDto } from './dto/update-cart-context.dto';
 import type { UpdateCartItemDto } from './dto/update-cart-item.dto';
@@ -31,6 +32,14 @@ const cartInclude = Prisma.validator<Prisma.CartInclude>()({
   deliveryAddress: true,
   items: {
     orderBy: { createdAt: 'asc' },
+    include: {
+      offer: {
+        select: {
+          minimumOrderQuantity: true,
+          maximumOrderQuantity: true,
+        },
+      },
+    },
   },
 });
 
@@ -68,6 +77,7 @@ export class CartService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly accessService: AccessService,
+    private readonly kisanClubBenefitService?: KisanClubBenefitService,
   ) {}
 
   async getMyCart(actor: CurrentUser) {
@@ -125,10 +135,29 @@ export class CartService {
       dto.quantity,
     );
     const existingItem = cart.items.find((item) => item.offerId === offer.id);
+    const clubProgrammeEligible =
+      (await this.kisanClubBenefitService?.isProgrammeEligibleForCheckout(this.prisma, {
+        farmerProfileId: profile.id,
+        productId: offer.productId,
+        variantId: offer.variantId,
+        pincode: destination.pincode,
+        at: new Date(),
+      })) ?? false;
+    const clubBenefit =
+      (await this.kisanClubBenefitService?.evaluateForCheckout(this.prisma, {
+        farmerProfileId: profile.id,
+        productId: offer.productId,
+        variantId: offer.variantId,
+        pincode: destination.pincode,
+        unitPricePaise: offer.sellingPricePaise,
+        quantity: dto.quantity,
+        at: new Date(),
+      })) ?? null;
     const itemData = this.cartItemSnapshot(offer, {
       quantity: dto.quantity,
       serviceablePincode: destination.pincode,
       availableQuantity,
+      clubBenefitSnapshotPaise: clubBenefit?.totalBenefitPaise ?? 0,
     });
 
     const updatedCart = await this.prisma.$transaction(async (tx) => {
@@ -137,6 +166,7 @@ export class CartService {
         data: {
           serviceablePincode: destination.pincode,
           deliveryAddressId: destination.addressId,
+          kisanClubContext: clubProgrammeEligible || cart.kisanClubContext,
         },
       });
 
@@ -189,16 +219,41 @@ export class CartService {
       serviceablePincode,
       dto.quantity,
     );
+    const clubBenefit =
+      (await this.kisanClubBenefitService?.evaluateForCheckout(this.prisma, {
+        farmerProfileId: profile.id,
+        productId: offer.productId,
+        variantId: offer.variantId,
+        pincode: serviceablePincode,
+        unitPricePaise: offer.sellingPricePaise,
+        quantity: dto.quantity,
+        at: new Date(),
+      })) ?? null;
+    const clubProgrammeEligible =
+      (await this.kisanClubBenefitService?.isProgrammeEligibleForCheckout(this.prisma, {
+        farmerProfileId: profile.id,
+        productId: offer.productId,
+        variantId: offer.variantId,
+        pincode: serviceablePincode,
+        at: new Date(),
+      })) ?? false;
     const itemData = this.cartItemSnapshot(offer, {
       quantity: dto.quantity,
       serviceablePincode,
       availableQuantity,
+      clubBenefitSnapshotPaise: clubBenefit?.totalBenefitPaise ?? 0,
     });
 
     const updatedCart = await this.prisma.$transaction(async (tx) => {
       const updatedItem = await tx.cartItem.update({
         where: { id: cartItemId },
         data: itemData,
+      });
+      await tx.cart.update({
+        where: { id: cart.id },
+        data: {
+          kisanClubContext: clubProgrammeEligible || cart.kisanClubContext,
+        },
       });
 
       const auditInput = this.withActor(actor, {
@@ -227,6 +282,12 @@ export class CartService {
       await tx.cartItem.delete({
         where: { id: cartItemId },
       });
+      await tx.cart.update({
+        where: { id: cart.id },
+        data: {
+          kisanClubContext: cart.kisanClubContext && cart.items.length > 1,
+        },
+      });
 
       const auditInput = this.withActor(actor, {
         action: 'CART_ITEM_REMOVED',
@@ -252,6 +313,7 @@ export class CartService {
       await tx.cartItem.deleteMany({
         where: { cartId: cart.id },
       });
+      await tx.cart.update({ where: { id: cart.id }, data: { kisanClubContext: false } });
 
       const auditInput = this.withActor(actor, {
         action: 'CART_CLEARED',
@@ -519,6 +581,7 @@ export class CartService {
       quantity: number;
       serviceablePincode: string;
       availableQuantity: number;
+      clubBenefitSnapshotPaise: number;
     },
   ): Omit<Prisma.CartItemUncheckedCreateInput, 'cartId'> {
     return {
@@ -530,6 +593,7 @@ export class CartService {
       batchId: offer.batchId ?? null,
       quantity: input.quantity,
       priceSnapshotPaise: offer.sellingPricePaise,
+      clubBenefitSnapshotPaise: input.clubBenefitSnapshotPaise,
       availableQuantitySnapshot: input.availableQuantity,
       serviceablePincodeSnapshot: input.serviceablePincode,
       productNameSnapshot: offer.product.name,
@@ -552,7 +616,10 @@ export class CartService {
       batchId: item.batchId,
       quantity: item.quantity,
       priceSnapshotPaise: item.priceSnapshotPaise,
+      clubBenefitSnapshotPaise: item.clubBenefitSnapshotPaise,
       availableQuantitySnapshot: item.availableQuantitySnapshot,
+      minimumOrderQuantity: item.offer.minimumOrderQuantity,
+      maximumOrderQuantity: item.offer.maximumOrderQuantity,
       serviceablePincodeSnapshot: item.serviceablePincodeSnapshot,
       productNameSnapshot: item.productNameSnapshot,
       variantNameSnapshot: item.variantNameSnapshot,
@@ -561,10 +628,15 @@ export class CartService {
       fulfilmentModeSnapshot: item.fulfilmentModeSnapshot,
       deliverySlaDaysSnapshot: item.deliverySlaDaysSnapshot,
       lineTotalPaise: item.priceSnapshotPaise * item.quantity,
+      farmerPayablePaise: item.priceSnapshotPaise * item.quantity - item.clubBenefitSnapshotPaise,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     }));
     const subtotalPaise = items.reduce((total, item) => total + item.lineTotalPaise, 0);
+    const clubBenefitPaise = items.reduce(
+      (total, item) => total + item.clubBenefitSnapshotPaise,
+      0,
+    );
 
     return {
       id: cart.id,
@@ -590,6 +662,9 @@ export class CartService {
       status: cart.status,
       itemCount: items.length,
       subtotalPaise,
+      clubBenefitPaise,
+      farmerPayablePaise: subtotalPaise - clubBenefitPaise,
+      kisanClubContext: cart.kisanClubContext,
       items,
       createdAt: cart.createdAt,
       updatedAt: cart.updatedAt,

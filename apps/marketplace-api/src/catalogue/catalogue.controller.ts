@@ -29,6 +29,7 @@ import { ReviewCatalogueItemDto } from './dto/review-catalogue-item.dto';
 import { SubmitCatalogueItemDto } from './dto/submit-catalogue-item.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateProductVariantDto } from './dto/update-product-variant.dto';
 
 @ApiTags('catalogue')
 @Controller('catalogue')
@@ -141,6 +142,23 @@ export class CatalogueController {
     @Req() request: Request,
   ) {
     return this.catalogueService.addProductVariant(productId, dto, actor, getRequestId(request));
+  }
+
+  @Patch('products/:productId/variants/:variantId')
+  updateProductVariant(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Param('variantId', ParseUUIDPipe) variantId: string,
+    @Body() dto: UpdateProductVariantDto,
+    @CurrentUserContext() actor: CurrentUser,
+    @Req() request: Request,
+  ) {
+    return this.catalogueService.updateProductVariant(
+      productId,
+      variantId,
+      dto,
+      actor,
+      getRequestId(request),
+    );
   }
 
   @Post('products/:productId/documents')

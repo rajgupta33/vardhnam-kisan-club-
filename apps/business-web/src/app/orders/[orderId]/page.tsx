@@ -2,22 +2,29 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type {
   ProductDeliveryAssignmentStatus,
+  ProductInvoiceDocument,
   ProductOrder,
   ProductOrderStatus,
 } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
+import { ConfirmSubmitButton } from '../../../components/confirm-submit-button';
+import { DataTable } from '../../../components/data-table';
+import { EmptyState } from '../../../components/empty-state';
+import { StatusBadge } from '../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
-import { loadFulfilmentOrderDetail } from '../../../lib/marketplace-api';
+import { loadFulfilmentInvoicePdf, loadFulfilmentOrderDetail } from '../../../lib/marketplace-api';
 import {
   acceptOrderAction,
   assignDeliveryAction,
   completeDeliveryAction,
+  downloadInvoicePdfAction,
   generateInvoiceAction,
   markOutForDeliveryAction,
   markReadyForPickupAction,
   markReadyToPackAction,
   packOrderAction,
   rejectOrderAction,
+  requestInvoicePdfAction,
 } from '../actions';
 
 export const dynamic = 'force-dynamic';
@@ -41,10 +48,11 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
   }
 
   const order = result.ok ? result.data : undefined;
+  const invoicePdfResult = order?.invoice ? await loadFulfilmentInvoicePdf(orderId) : undefined;
   const connectionError = result.ok ? undefined : result.error;
   const statuses = [
     {
-      label: result.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: result.config.configured ? 'Authenticated session' : 'Session missing',
       tone: result.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -76,10 +84,10 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
       {error ? <div className="noticeBanner danger">{error}</div> : null}
 
       {connectionError || !order ? (
-        <section className="emptyState">
-          <h3>Fulfilment Order API Connection Blocked</h3>
-          <p className="mutedText">{connectionError ?? 'Order was not loaded'}</p>
-        </section>
+        <EmptyState
+          description={connectionError ?? 'Order was not loaded'}
+          title="Fulfilment Order API Connection Blocked"
+        />
       ) : (
         <>
           <div className="breadcrumbRow">
@@ -95,9 +103,7 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
                   <p className="eyebrow">{order.sellerNameSnapshot}</p>
                   <h3>Order Summary</h3>
                 </div>
-                <span className={`statusBadge ${statusTone(order.status)}`}>
-                  {labelFromCode(order.status)}
-                </span>
+                <StatusBadge label={labelFromCode(order.status)} tone={statusTone(order.status)} />
               </div>
               <dl className="definitionGrid threeColumn">
                 <DetailField label="Order number" value={order.orderNumber} />
@@ -112,7 +118,13 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
             <DecisionPanel order={order} />
           </section>
 
-          <InvoicePanel order={order} />
+          <InvoicePanel
+            document={invoicePdfResult?.ok ? invoicePdfResult.data : undefined}
+            documentError={
+              invoicePdfResult && !invoicePdfResult.ok ? invoicePdfResult.error : undefined
+            }
+            order={order}
+          />
           <DispatchPanel order={order} />
           <DeliveryAssignmentPanel order={order} />
 
@@ -123,45 +135,54 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
                 <h3>Reserved Product Snapshots</h3>
               </div>
             </div>
-            <div className="tableShell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>Warehouse</th>
-                    <th>Qty</th>
-                    <th>Unit price</th>
-                    <th>Line total</th>
-                    <th>Reservations</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {order.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        {item.productNameSnapshot}
-                        <br />
-                        <span className="mutedText">{item.variantNameSnapshot}</span>
-                      </td>
-                      <td>{item.warehouseNameSnapshot}</td>
-                      <td>{item.quantity}</td>
-                      <td>{formatPaise(item.unitPricePaise)}</td>
-                      <td>{formatPaise(item.lineTotalPaise)}</td>
-                      <td>
-                        {item.reservations.length === 0
-                          ? 'Not recorded'
-                          : item.reservations
-                              .map(
-                                (reservation) =>
-                                  `${reservation.batchNumber}: ${reservation.quantity}`,
-                              )
-                              .join(', ')}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable<ProductOrder['items'][number]>
+              caption="Reserved product snapshots for this order"
+              columns={[
+                {
+                  key: 'product',
+                  header: 'Product',
+                  render: (item) => (
+                    <>
+                      {item.productNameSnapshot}
+                      <br />
+                      <span className="mutedText">{item.variantNameSnapshot}</span>
+                    </>
+                  ),
+                },
+                {
+                  key: 'warehouse',
+                  header: 'Warehouse',
+                  render: (item) => item.warehouseNameSnapshot,
+                },
+                { key: 'quantity', header: 'Qty', render: (item) => item.quantity },
+                {
+                  key: 'unit-price',
+                  header: 'Unit price',
+                  render: (item) => formatPaise(item.unitPricePaise),
+                },
+                {
+                  key: 'line-total',
+                  header: 'Line total',
+                  render: (item) => formatPaise(item.lineTotalPaise),
+                },
+                {
+                  key: 'reservations',
+                  header: 'Reservations',
+                  render: (item) =>
+                    item.reservations.length === 0
+                      ? 'Not recorded'
+                      : item.reservations
+                          .map(
+                            (reservation) => `${reservation.batchNumber}: ${reservation.quantity}`,
+                          )
+                          .join(', '),
+                },
+              ]}
+              emptyDescription="The API returned no reserved product snapshots for this order."
+              emptyTitle="No order items"
+              rowKey={(item) => item.id}
+              rows={order.items}
+            />
           </section>
 
           <section className="panel" aria-label="Order status history">
@@ -171,31 +192,41 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
                 <h3>Status History</h3>
               </div>
             </div>
-            <div className="tableShell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Transition</th>
-                    <th>Actor</th>
-                    <th>Reason</th>
-                    <th>Recorded</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {order.statusHistory.map((history) => (
-                    <tr key={history.id}>
-                      <td>
-                        {history.fromStatus ? labelFromCode(history.fromStatus) : 'Created'} to{' '}
-                        {labelFromCode(history.toStatus)}
-                      </td>
-                      <td>{history.actorRole ? labelFromCode(history.actorRole) : 'System'}</td>
-                      <td>{history.reason ?? 'Not recorded'}</td>
-                      <td>{formatDateTime(history.createdAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable<ProductOrder['statusHistory'][number]>
+              caption="Order status transition history"
+              columns={[
+                {
+                  key: 'transition',
+                  header: 'Transition',
+                  render: (history) => (
+                    <>
+                      {history.fromStatus ? labelFromCode(history.fromStatus) : 'Created'} to{' '}
+                      {labelFromCode(history.toStatus)}
+                    </>
+                  ),
+                },
+                {
+                  key: 'actor',
+                  header: 'Actor',
+                  render: (history) =>
+                    history.actorRole ? labelFromCode(history.actorRole) : 'System',
+                },
+                {
+                  key: 'reason',
+                  header: 'Reason',
+                  render: (history) => history.reason ?? 'Not recorded',
+                },
+                {
+                  key: 'recorded',
+                  header: 'Recorded',
+                  render: (history) => formatDateTime(history.createdAt),
+                },
+              ]}
+              emptyDescription="No state transitions were returned for this order."
+              emptyTitle="No status history"
+              rowKey={(history) => history.id}
+              rows={order.statusHistory}
+            />
           </section>
         </>
       )}
@@ -214,7 +245,9 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
   const canMarkReadyForPickup = order.status === 'PACKED' && hasInvoice && !hasDispatch;
   const canAssignDelivery = order.status === 'READY_FOR_PICKUP' && !hasDeliveryAssignment;
   const canMarkOutForDelivery =
-    order.status === 'READY_FOR_PICKUP' && order.deliveryAssignment?.status === 'ASSIGNED';
+    order.status === 'READY_FOR_PICKUP' &&
+    order.deliveryAssignment?.status === 'ACCEPTED' &&
+    Boolean(order.deliveryAssignment.pickupVerifiedAt);
   const canCompleteDelivery =
     order.status === 'OUT_FOR_DELIVERY' && order.deliveryAssignment?.status === 'OUT_FOR_DELIVERY';
 
@@ -239,9 +272,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canDecide} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Accept this order and reserve it for distributor fulfilment?"
+            disabled={!canDecide}
+          >
             Accept order
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={rejectOrderAction} className="rejectForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -255,9 +291,13 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="dangerButton" disabled={!canDecide} type="submit">
+          <ConfirmSubmitButton
+            className="dangerButton"
+            confirmMessage="Reject this order with the entered reason?"
+            disabled={!canDecide}
+          >
             Reject order
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={markReadyToPackAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -270,9 +310,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canMarkReadyToPack} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Mark this order ready to pack?"
+            disabled={!canMarkReadyToPack}
+          >
             Ready to pack
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={packOrderAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -285,9 +328,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canPack} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Confirm that this order has been packed?"
+            disabled={!canPack}
+          >
             Mark packed
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={generateInvoiceAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -300,9 +346,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canGenerateInvoice} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Generate the immutable seller invoice snapshot for this packed order?"
+            disabled={!canGenerateInvoice}
+          >
             {hasInvoice ? 'Invoice generated' : 'Generate invoice'}
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={markReadyForPickupAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -315,9 +364,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canMarkReadyForPickup} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Mark this invoiced order ready for pickup?"
+            disabled={!canMarkReadyForPickup}
+          >
             {hasDispatch ? 'Ready for pickup' : 'Mark ready for pickup'}
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={assignDeliveryAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -340,9 +392,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canAssignDelivery} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Assign this order to the entered delivery partner?"
+            disabled={!canAssignDelivery}
+          >
             {hasDeliveryAssignment ? 'Delivery assigned' : 'Assign delivery'}
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={markOutForDeliveryAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -355,9 +410,12 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canMarkOutForDelivery} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Confirm pickup handoff and mark this order out for delivery?"
+            disabled={!canMarkOutForDelivery}
+          >
             Mark out for delivery
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={completeDeliveryAction} className="inlineForm">
           <input name="orderId" type="hidden" value={order.id} />
@@ -384,16 +442,27 @@ function DecisionPanel({ order }: { order: ProductOrder }) {
               type="text"
             />
           </label>
-          <button className="primaryButton" disabled={!canCompleteDelivery} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Complete delivery using the entered farmer OTP and proof note?"
+            disabled={!canCompleteDelivery}
+          >
             Complete delivery
-          </button>
+          </ConfirmSubmitButton>
         </form>
       </div>
     </article>
   );
 }
 
-function InvoicePanel({ order }: { order: ProductOrder }) {
+function InvoicePanel({
+  order,
+  document,
+  documentError,
+}: {
+  order: ProductOrder;
+  document?: ProductInvoiceDocument | undefined;
+  documentError?: string | undefined;
+}) {
   if (!order.invoice) {
     return null;
   }
@@ -407,7 +476,7 @@ function InvoicePanel({ order }: { order: ProductOrder }) {
           <p className="eyebrow">Invoice</p>
           <h3>{invoice.invoiceNumber}</h3>
         </div>
-        <span className="statusBadge ok">{labelFromCode(invoice.status)}</span>
+        <StatusBadge label={labelFromCode(invoice.status)} tone="ok" />
       </div>
       <dl className="definitionGrid threeColumn">
         <DetailField label="Farmer" value={invoice.farmerNameSnapshot} />
@@ -419,6 +488,40 @@ function InvoicePanel({ order }: { order: ProductOrder }) {
         <DetailField label="Items" value={invoice.itemCount} />
         <DetailField label="Generated" value={formatDateTime(invoice.generatedAt)} />
       </dl>
+      <div className="actionCluster">
+        {document?.status === 'AVAILABLE' ? (
+          <form action={downloadInvoicePdfAction} className="inlineForm">
+            <input name="orderId" type="hidden" value={order.id} />
+            <p className="mutedText">A short-lived audited download URL is issued on click.</p>
+            <button className="primaryButton" type="submit">
+              Download invoice PDF
+            </button>
+          </form>
+        ) : document?.status === 'QUEUED' || document?.status === 'PROCESSING' ? (
+          <div>
+            <p className="mutedText">
+              PDF status: {labelFromCode(document.status)}. Refresh to check the worker result.
+            </p>
+            <Link className="secondaryButton" href={`/orders/${order.id}`}>
+              Check PDF status
+            </Link>
+          </div>
+        ) : (
+          <form action={requestInvoicePdfAction} className="inlineForm">
+            <input name="orderId" type="hidden" value={order.id} />
+            <p className="mutedText">
+              {document?.status === 'FAILED'
+                ? 'PDF generation failed. Requesting it again safely requeues the same document.'
+                : documentError?.includes('NOT_FOUND')
+                  ? 'The invoice PDF has not been requested.'
+                  : (documentError ?? 'The invoice PDF is not available yet.')}
+            </p>
+            <button className="primaryButton" type="submit">
+              {document?.status === 'FAILED' ? 'Retry invoice PDF' : 'Prepare invoice PDF'}
+            </button>
+          </form>
+        )}
+      </div>
     </section>
   );
 }
@@ -437,7 +540,7 @@ function DispatchPanel({ order }: { order: ProductOrder }) {
           <p className="eyebrow">Dispatch</p>
           <h3>{dispatch.dispatchNumber}</h3>
         </div>
-        <span className="statusBadge ok">{labelFromCode(dispatch.status)}</span>
+        <StatusBadge label={labelFromCode(dispatch.status)} tone="ok" />
       </div>
       <dl className="definitionGrid threeColumn">
         <DetailField label="Invoice" value={dispatch.invoiceNumberSnapshot} />
@@ -466,9 +569,10 @@ function DeliveryAssignmentPanel({ order }: { order: ProductOrder }) {
           <p className="eyebrow">Delivery</p>
           <h3>{assignment.assignmentNumber}</h3>
         </div>
-        <span className={`statusBadge ${deliveryStatusTone(assignment.status)}`}>
-          {labelFromCode(assignment.status)}
-        </span>
+        <StatusBadge
+          label={labelFromCode(assignment.status)}
+          tone={deliveryStatusTone(assignment.status)}
+        />
       </div>
       <dl className="definitionGrid threeColumn">
         <DetailField label="Partner user" value={assignment.deliveryPartnerUserId} />

@@ -4,6 +4,9 @@ import {
   CartStatus,
   CatalogueStatus,
   DistributorOfferStatus,
+  DeliveryFailureReasonCode,
+  DeliveryPartnerAvailabilityStatus,
+  DeliveryProofLocationStatus,
   FulfilmentMode,
   IdempotencyStatus,
   InventoryBatchStatus,
@@ -18,12 +21,14 @@ import {
   ProductDispatchStatus,
   ProductInvoiceStatus,
   ProductOrderStatus,
+  type ProductDeliveryAssignment,
   UserStatus,
   WarehouseStatus,
 } from '@prisma/client';
 import { PermissionCode } from '../src/access/permission-codes';
 import type { CurrentUser } from '../src/auth/current-user.interface';
 import { CheckoutService } from '../src/checkout/checkout.service';
+import { indianFinancialYear } from '../src/checkout/invoice-tax';
 
 const farmerUserId = '00000000-0000-4000-8000-000000004101';
 const farmerOrganisationId = '00000000-0000-4000-8000-000000004102';
@@ -58,6 +63,16 @@ const accessService = {
 
 const financeService = {
   recordDeliveryCommission: jest.fn().mockResolvedValue(undefined),
+};
+
+const notificationEventsService = {
+  emitOrderEvent: jest.fn().mockResolvedValue(undefined),
+};
+
+// Mirrors the mocked-SMS deployment every other test assumes, so the delivery
+// OTP is still echoed back the way `phase4-fulfilment.spec.ts` expects.
+const otpSender = {
+  isSmsMocked: jest.fn().mockReturnValue(true),
 };
 
 function deliveryOtpHash(code: string, salt: string): string {
@@ -121,6 +136,8 @@ describe('CheckoutService', () => {
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(service.checkoutFromCart({}, farmerActor)).rejects.toBeInstanceOf(
@@ -130,6 +147,10 @@ describe('CheckoutService', () => {
 
   it('creates child product orders and reservation movements from the cart', async () => {
     const auditService = { record: jest.fn().mockResolvedValue({}) };
+    const clubBenefitService = {
+      evaluateForCheckout: jest.fn().mockResolvedValue(null),
+      isProgrammeEligibleForCheckout: jest.fn().mockResolvedValue(true),
+    };
     const checkoutDetail = checkoutDetailFixture();
     const tx = {
       farmerProfile: {
@@ -190,6 +211,9 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
+      clubBenefitService as never,
     );
 
     const result = await service.checkoutFromCart(
@@ -219,6 +243,7 @@ describe('CheckoutService', () => {
           sellerOrganisationId: distributorOrganisationId,
           status: ProductOrderStatus.PENDING_PAYMENT,
           subtotalPaise: 236000,
+          isKisanClubOrder: true,
         }),
       }),
     );
@@ -264,6 +289,8 @@ describe('CheckoutService', () => {
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(service.cancelMyCheckout(checkoutId, {}, farmerActor)).rejects.toBeInstanceOf(
@@ -323,6 +350,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.cancelMyCheckout(
@@ -429,6 +458,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.cancelMyOrder(
@@ -487,6 +518,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.acceptFulfilmentOrder(
@@ -523,6 +556,15 @@ describe('CheckoutService', () => {
       }),
       tx,
     );
+    expect(notificationEventsService.emitOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        event: 'ORDER_ACCEPTED',
+        farmerProfileId,
+        productOrderId: orderId,
+        requestId: 'req-fulfil-accept-1',
+      }),
+    );
   });
 
   it('marks an accepted fulfilment order ready to pack', async () => {
@@ -550,6 +592,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.markFulfilmentOrderReadyToPack(
@@ -579,6 +623,7 @@ describe('CheckoutService', () => {
       }),
       tx,
     );
+    expect(notificationEventsService.emitOrderEvent).not.toHaveBeenCalled();
   });
 
   it('packs a ready-to-pack fulfilment order', async () => {
@@ -606,6 +651,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.packFulfilmentOrder(
@@ -635,20 +682,36 @@ describe('CheckoutService', () => {
       }),
       tx,
     );
+    expect(notificationEventsService.emitOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ event: 'ORDER_PACKED', productOrderId: orderId }),
+    );
   });
 
   it('generates an invoice snapshot for a packed fulfilment order', async () => {
+    const financialYear = indianFinancialYear(new Date());
     const auditService = { record: jest.fn().mockResolvedValue({}) };
     const invoice = productInvoiceFixture();
     const tx = {
       organisation: {
         findUnique: jest.fn().mockResolvedValue(activeDistributorOrganisationFixture()),
       },
+      distributorProfile: {
+        findUnique: jest.fn().mockResolvedValue({
+          operatingAddress: 'Plot 12, Agri Market Road',
+          city: 'Jaipur',
+          state: 'Rajasthan',
+          pincode: '302001',
+        }),
+      },
       farmerProfile: {
         findUnique: jest.fn().mockResolvedValue(farmerProfileFixture()),
       },
       productInvoice: {
         create: jest.fn().mockResolvedValue(invoice),
+      },
+      invoiceSequence: {
+        upsert: jest.fn().mockResolvedValue({ lastNumber: 1 }),
       },
       productOrder: {
         findFirst: jest
@@ -665,6 +728,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.generateFulfilmentOrderInvoice(
@@ -679,7 +744,11 @@ describe('CheckoutService', () => {
         id: invoiceId,
         invoiceNumber: 'INV-20260803-TEST0001',
         subtotalPaise: 236000,
-        taxPaise: 0,
+        taxableAmountPaise: 224762,
+        taxPaise: 11238,
+        cgstPaise: 5619,
+        sgstPaise: 5619,
+        igstPaise: 0,
         totalPaise: 236000,
       }),
     );
@@ -690,19 +759,43 @@ describe('CheckoutService', () => {
           checkoutId,
           farmerProfileId,
           sellerOrganisationId: distributorOrganisationId,
+          invoiceNumber: `0000/${financialYear.slice(-2)}/000001`,
           status: ProductInvoiceStatus.GENERATED,
           subtotalPaise: 236000,
-          taxPaise: 0,
+          taxableAmountPaise: 224762,
+          taxPaise: 11238,
+          cgstPaise: 5619,
+          sgstPaise: 5619,
+          igstPaise: 0,
           totalPaise: 236000,
           sellerLegalNameSnapshot: 'Phase 4A Distributor Private Limited',
           sellerDisplayNameSnapshot: 'Phase 4A Distributor',
           sellerGstinSnapshot: '08ABCDE1234F1Z5',
+          sellerStateCodeSnapshot: '08',
+          sellerAddressSnapshot: 'Plot 12, Agri Market Road, Jaipur, Rajasthan, 302001',
+          placeOfSupplyStateCode: '08',
+          financialYear,
+          sequenceNumber: 1,
           farmerNameSnapshot: 'Phase 3B Farmer',
           generatedByUserId: distributorActor.userId,
           generatedByRole: PlatformRole.DISTRIBUTOR_OWNER,
         }),
       }),
     );
+    expect(tx.invoiceSequence.upsert).toHaveBeenCalledWith({
+      where: {
+        sellerOrganisationId_financialYear: {
+          sellerOrganisationId: distributorOrganisationId,
+          financialYear,
+        },
+      },
+      create: {
+        sellerOrganisationId: distributorOrganisationId,
+        financialYear,
+        lastNumber: 1,
+      },
+      update: { lastNumber: { increment: 1 } },
+    });
     expect(auditService.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'PRODUCT_INVOICE_GENERATED',
@@ -711,6 +804,14 @@ describe('CheckoutService', () => {
         organisationId: distributorOrganisationId,
       }),
       tx,
+    );
+    expect(notificationEventsService.emitOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        event: 'INVOICE_GENERATED',
+        productOrderId: orderId,
+        invoiceId,
+      }),
     );
   });
 
@@ -733,6 +834,8 @@ describe('CheckoutService', () => {
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(
@@ -774,6 +877,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.markFulfilmentOrderReadyForPickup(
@@ -854,6 +959,8 @@ describe('CheckoutService', () => {
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(
@@ -896,6 +1003,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.assignFulfilmentOrderDelivery(
@@ -952,11 +1061,11 @@ describe('CheckoutService', () => {
     );
   });
 
-  it('moves an assigned delivery out for delivery by the assigned partner', async () => {
+  it('moves an accepted delivery out for delivery by the assigned partner', async () => {
     const auditService = { record: jest.fn().mockResolvedValue({}) };
     const invoice = productInvoiceFixture();
     const dispatch = productDispatchFixture();
-    const assignment = productDeliveryAssignmentFixture();
+    const assignment = productDeliveryAssignmentFixture(ProductDeliveryAssignmentStatus.ACCEPTED);
     const outForDeliveryAssignment = productDeliveryAssignmentFixture(
       ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
     );
@@ -997,6 +1106,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.markFulfilmentOrderOutForDelivery(
@@ -1038,6 +1149,10 @@ describe('CheckoutService', () => {
         resourceId: deliveryAssignmentId,
       }),
       tx,
+    );
+    expect(notificationEventsService.emitOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ event: 'ORDER_OUT_FOR_DELIVERY', productOrderId: orderId }),
     );
   });
 
@@ -1091,6 +1206,8 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     const result = await service.completeFulfilmentOrderDelivery(
@@ -1098,6 +1215,11 @@ describe('CheckoutService', () => {
       {
         otpCode: '123456',
         proofNote: 'Delivered to farmer and OTP verified',
+        proofLocationStatus: DeliveryProofLocationStatus.GRANTED,
+        proofLatitude: 20.593684,
+        proofLongitude: 78.96288,
+        proofAccuracyMetres: 12.5,
+        proofLocationCapturedAt: '2026-08-03T00:20:00.000Z',
       },
       deliveryPartnerActor,
       'req-delivery-complete-1',
@@ -1114,6 +1236,11 @@ describe('CheckoutService', () => {
           completedByRole: PlatformRole.DELIVERY_PARTNER,
           deliveryProofNote: 'Delivered to farmer and OTP verified',
           otpVerifiedAt: expect.any(Date),
+          proofLocationStatus: DeliveryProofLocationStatus.GRANTED,
+          proofLatitude: 20.593684,
+          proofLongitude: 78.96288,
+          proofAccuracyMetres: 12.5,
+          proofLocationCapturedAt: new Date('2026-08-03T00:20:00.000Z'),
         }),
       }),
     );
@@ -1134,6 +1261,10 @@ describe('CheckoutService', () => {
         resourceId: deliveryAssignmentId,
       }),
       tx,
+    );
+    expect(notificationEventsService.emitOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ event: 'ORDER_DELIVERED', productOrderId: orderId }),
     );
   });
 
@@ -1179,12 +1310,14 @@ describe('CheckoutService', () => {
       auditService as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(
       service.completeFulfilmentOrderDelivery(
         orderId,
-        { otpCode: '000000' },
+        { otpCode: '000000', proofLocationStatus: DeliveryProofLocationStatus.UNAVAILABLE },
         deliveryPartnerActor,
         'req-delivery-otp-failed-1',
       ),
@@ -1215,12 +1348,182 @@ describe('CheckoutService', () => {
     );
   });
 
+  it('records a structured failed delivery and its scheduled retry', async () => {
+    const auditService = { record: jest.fn().mockResolvedValue({}) };
+    const invoice = productInvoiceFixture();
+    const dispatch = productDispatchFixture();
+    const assignment = productDeliveryAssignmentFixture(
+      ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+    );
+    const retryAt = new Date(Date.now() + 60 * 60 * 1000);
+    const failedAssignment = {
+      ...assignment,
+      status: ProductDeliveryAssignmentStatus.DELIVERY_FAILED,
+      failureAttemptCount: 1,
+      lastFailureReasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+      lastFailureNote: 'Farmer requested tomorrow',
+      lastFailedAt: new Date(),
+      lastFailedByUserId: deliveryPartnerUserId,
+      lastFailedByRole: PlatformRole.DELIVERY_PARTNER,
+      retryScheduledAt: retryAt,
+    };
+    const tx = {
+      productDeliveryAssignment: {
+        update: jest.fn().mockResolvedValue(failedAssignment),
+      },
+      productOrder: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(
+            orderDetailFixture(ProductOrderStatus.OUT_FOR_DELIVERY, {
+              invoice,
+              dispatch,
+              deliveryAssignment: assignment,
+            }),
+          )
+          .mockResolvedValueOnce(
+            orderDetailFixture(ProductOrderStatus.DELIVERY_FAILED, {
+              invoice,
+              dispatch,
+              deliveryAssignment: failedAssignment,
+            }),
+          ),
+        update: jest
+          .fn()
+          .mockResolvedValue(productOrderFixture(ProductOrderStatus.DELIVERY_FAILED)),
+      },
+      productOrderStatusHistory: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new CheckoutService(
+      {
+        $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      } as never,
+      auditService as never,
+      accessService as never,
+      financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
+    );
+
+    const result = await service.reportDeliveryFailure(
+      orderId,
+      {
+        reasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+        note: 'Farmer requested tomorrow',
+        retryAt: retryAt.toISOString(),
+      },
+      deliveryPartnerActor,
+      'req-delivery-failed-1',
+    );
+
+    expect(result.status).toBe(ProductOrderStatus.DELIVERY_FAILED);
+    expect(tx.productDeliveryAssignment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: ProductDeliveryAssignmentStatus.DELIVERY_FAILED,
+          failureAttemptCount: { increment: 1 },
+          lastFailureReasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+          retryScheduledAt: retryAt,
+        }),
+      }),
+    );
+    expect(auditService.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'PRODUCT_DELIVERY_FAILED' }),
+      tx,
+    );
+  });
+
+  it('starts a due failed-delivery retry with a fresh OTP', async () => {
+    const auditService = { record: jest.fn().mockResolvedValue({}) };
+    const invoice = productInvoiceFixture();
+    const dispatch = productDispatchFixture();
+    const failedAssignment = {
+      ...productDeliveryAssignmentFixture(ProductDeliveryAssignmentStatus.DELIVERY_FAILED),
+      failureAttemptCount: 1,
+      lastFailureReasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+      lastFailureNote: null,
+      lastFailedAt: new Date(Date.now() - 60_000),
+      lastFailedByUserId: deliveryPartnerUserId,
+      lastFailedByRole: PlatformRole.DELIVERY_PARTNER,
+      retryScheduledAt: new Date(Date.now() - 1_000),
+    };
+    const retriedAssignment = {
+      ...failedAssignment,
+      status: ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+      otpExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      startedAt: new Date(),
+    };
+    const tx = {
+      productDeliveryAssignment: {
+        update: jest.fn().mockResolvedValue(retriedAssignment),
+      },
+      productOrder: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(
+            orderDetailFixture(ProductOrderStatus.DELIVERY_FAILED, {
+              invoice,
+              dispatch,
+              deliveryAssignment: failedAssignment,
+            }),
+          )
+          .mockResolvedValueOnce(
+            orderDetailFixture(ProductOrderStatus.OUT_FOR_DELIVERY, {
+              invoice,
+              dispatch,
+              deliveryAssignment: retriedAssignment,
+            }),
+          ),
+        update: jest
+          .fn()
+          .mockResolvedValue(productOrderFixture(ProductOrderStatus.OUT_FOR_DELIVERY)),
+      },
+      productOrderStatusHistory: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new CheckoutService(
+      {
+        $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      } as never,
+      auditService as never,
+      accessService as never,
+      financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
+    );
+
+    const result = await service.retryDelivery(
+      orderId,
+      { reason: 'Scheduled retry started' },
+      deliveryPartnerActor,
+      'req-delivery-retry-1',
+    );
+
+    expect(result.status).toBe(ProductOrderStatus.OUT_FOR_DELIVERY);
+    expect(result.deliveryAssignment?.mockOtpCode).toMatch(/^[0-9]{6}$/);
+    expect(tx.productDeliveryAssignment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+          otpHash: expect.any(String),
+          otpSalt: expect.any(String),
+          otpAttemptCount: 0,
+        }),
+      }),
+    );
+    expect(auditService.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'PRODUCT_DELIVERY_RETRIED' }),
+      tx,
+    );
+  });
+
   it('requires a rejection reason for fulfilment order rejection', async () => {
     const service = new CheckoutService(
       {} as never,
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(
@@ -1242,6 +1545,8 @@ describe('CheckoutService', () => {
       { record: jest.fn() } as never,
       accessService as never,
       financeService as never,
+      notificationEventsService as never,
+      otpSender as never,
     );
 
     await expect(service.getFulfilmentOrder(orderId, otherDistributorActor)).rejects.toBeInstanceOf(
@@ -1281,6 +1586,7 @@ function farmerAddressFixture() {
     city: 'Jaipur',
     district: 'Jaipur',
     state: 'Rajasthan',
+    stateCode: '08',
     pincode: '302001',
     landmark: null,
     isDefault: true,
@@ -1297,6 +1603,8 @@ function activeDistributorOrganisationFixture() {
     legalName: 'Phase 4A Distributor Private Limited',
     displayName: 'Phase 4A Distributor',
     gstin: '08ABCDE1234F1Z5',
+    registeredStateCode: '08',
+    gstinVerifiedAt: new Date('2026-08-03T00:00:00.000Z'),
     status: OrganisationStatus.ACTIVE,
     reviewedByUserId: null,
     reviewedAt: null,
@@ -1309,7 +1617,7 @@ function activeDistributorOrganisationFixture() {
 function activeDeliveryPartnerOrganisationFixture() {
   return {
     id: deliveryPartnerOrganisationId,
-    type: OrganisationType.SERVICE_PROVIDER,
+    type: OrganisationType.DELIVERY_PARTNER,
     slug: 'phase4e-delivery-partner',
     legalName: 'Phase 4E Delivery Partner',
     displayName: 'Phase 4E Delivery Partner',
@@ -1340,6 +1648,17 @@ function activeDeliveryPartnerUserFixture() {
         role: PlatformRole.DELIVERY_PARTNER,
         status: MembershipStatus.ACTIVE,
         organisation: activeDeliveryPartnerOrganisationFixture(),
+        createdAt: new Date('2026-08-03T00:00:00.000Z'),
+        updatedAt: new Date('2026-08-03T00:00:00.000Z'),
+      },
+    ],
+    deliveryPartnerProfiles: [
+      {
+        id: '00000000-0000-4000-8000-000000004212',
+        userId: deliveryPartnerUserId,
+        organisationId: deliveryPartnerOrganisationId,
+        availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+        availabilityChangedAt: new Date('2026-08-03T00:00:00.000Z'),
         createdAt: new Date('2026-08-03T00:00:00.000Z'),
         updatedAt: new Date('2026-08-03T00:00:00.000Z'),
       },
@@ -1483,6 +1802,8 @@ function offerFixture() {
       packSize: '1',
       packUnit: 'kg',
       mrpPaise: 125000,
+      hsnCode: '1008',
+      gstRateBps: 500,
       isActive: true,
       createdAt: new Date('2026-08-03T00:00:00.000Z'),
       updatedAt: new Date('2026-08-03T00:00:00.000Z'),
@@ -1559,6 +1880,7 @@ function productOrderFixture(status: ProductOrderStatus) {
     sellerGstinSnapshot: '08ABCDE1234F1Z5',
     deliveryAddressSnapshot: {
       pincode: '302001',
+      stateCode: '08',
     },
     subtotalPaise: 236000,
     itemCount: 1,
@@ -1580,6 +1902,8 @@ function productOrderItemFixture() {
     quantity: 2,
     unitPricePaise: 118000,
     lineTotalPaise: 236000,
+    hsnCodeSnapshot: '1008',
+    gstRateBpsSnapshot: 500,
     productNameSnapshot: 'Hybrid Bajra Seed',
     variantNameSnapshot: '1 kg pack',
     sellerNameSnapshot: 'Phase 3B Distributor',
@@ -1648,15 +1972,24 @@ function productInvoiceFixture() {
     status: ProductInvoiceStatus.GENERATED,
     currency: 'INR',
     subtotalPaise: 236000,
-    taxPaise: 0,
+    taxableAmountPaise: 224762,
+    taxPaise: 11238,
+    cgstPaise: 5619,
+    sgstPaise: 5619,
+    igstPaise: 0,
     totalPaise: 236000,
     itemCount: 1,
     sellerLegalNameSnapshot: 'Phase 4A Distributor Private Limited',
     sellerDisplayNameSnapshot: 'Phase 4A Distributor',
     sellerGstinSnapshot: '08ABCDE1234F1Z5',
+    sellerStateCodeSnapshot: '08',
+    placeOfSupplyStateCode: '08',
+    financialYear: '2026-27',
+    sequenceNumber: 1,
     farmerNameSnapshot: 'Phase 3B Farmer',
     deliveryAddressSnapshot: {
       pincode: '302001',
+      stateCode: '08',
     },
     lineItemsSnapshot: [
       {
@@ -1666,6 +1999,13 @@ function productInvoiceFixture() {
         quantity: 2,
         unitPricePaise: 118000,
         lineTotalPaise: 236000,
+        hsnCode: '1008',
+        gstRateBps: 500,
+        taxableAmountPaise: 224762,
+        taxPaise: 11238,
+        cgstPaise: 5619,
+        sgstPaise: 5619,
+        igstPaise: 0,
       },
     ],
     generatedByUserId: '00000000-0000-4000-8000-000000004203',
@@ -1717,6 +2057,9 @@ function productDispatchFixture() {
     readyForPickupReason: 'Packages ready at warehouse',
     readyByUserId: '00000000-0000-4000-8000-000000004203',
     readyByRole: PlatformRole.DISTRIBUTOR_OWNER,
+    packageQrHash: null,
+    packageQrIssuedAt: null,
+    packageQrIssuedByUserId: null,
     readyAt: new Date('2026-08-03T00:00:00.000Z'),
     createdAt: new Date('2026-08-03T00:00:00.000Z'),
     updatedAt: new Date('2026-08-03T00:00:00.000Z'),
@@ -1730,7 +2073,7 @@ function productDeliveryAssignmentFixture(
     otpAttemptCount?: number;
     deliveryProofNote?: string | null;
   } = {},
-) {
+): ProductDeliveryAssignment {
   const otpSalt = 'phase4e-test-salt';
   const startedAt =
     status === ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY ||
@@ -1740,6 +2083,10 @@ function productDeliveryAssignmentFixture(
   const completedAt =
     status === ProductDeliveryAssignmentStatus.DELIVERED
       ? new Date('2026-08-03T00:20:00.000Z')
+      : null;
+  const pickupVerifiedAt =
+    status === ProductDeliveryAssignmentStatus.ACCEPTED || startedAt
+      ? new Date('2026-08-03T00:08:00.000Z')
       : null;
 
   return {
@@ -1767,6 +2114,10 @@ function productDeliveryAssignmentFixture(
     otpExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
     otpAttemptCount: input.otpAttemptCount ?? 0,
     otpVerifiedAt: completedAt,
+    pickupVerificationAttemptCount: 0,
+    pickupVerifiedAt,
+    pickupVerifiedByUserId: pickupVerifiedAt ? deliveryPartnerUserId : null,
+    pickupVerifiedByRole: pickupVerifiedAt ? PlatformRole.DELIVERY_PARTNER : null,
     assignedByUserId: '00000000-0000-4000-8000-000000004206',
     assignedByRole: PlatformRole.OPERATIONS_MANAGER,
     assignedAt: new Date('2026-08-03T00:05:00.000Z'),
@@ -1777,6 +2128,18 @@ function productDeliveryAssignmentFixture(
     completedByRole: completedAt ? PlatformRole.DELIVERY_PARTNER : null,
     completedAt,
     deliveryProofNote: input.deliveryProofNote ?? null,
+    proofLocationStatus: null,
+    proofLatitude: null,
+    proofLongitude: null,
+    proofAccuracyMetres: null,
+    proofLocationCapturedAt: null,
+    failureAttemptCount: 0,
+    lastFailureReasonCode: null,
+    lastFailureNote: null,
+    lastFailedAt: null,
+    lastFailedByUserId: null,
+    lastFailedByRole: null,
+    retryScheduledAt: null,
     createdAt: new Date('2026-08-03T00:05:00.000Z'),
     updatedAt: completedAt ?? startedAt ?? new Date('2026-08-03T00:05:00.000Z'),
   };

@@ -24,6 +24,12 @@ export class ListMarketplaceProductsQueryDto extends PaginationQueryDto {
   @MaxLength(120)
   brandSlug?: string;
 
+  @ApiPropertyOptional({ example: 'Bajra' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  cropTarget?: string;
+
   @ApiPropertyOptional({ example: 'bajra' })
   @IsOptional()
   @IsString()

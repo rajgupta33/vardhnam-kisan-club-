@@ -129,7 +129,9 @@ describe('Phase 2C distributor offer workflow', () => {
         sku: `P2C-1KG-${suffix.slice(0, 8)}`,
         variantName: '1 kg pack',
         packSize: new Prisma.Decimal(1),
-        packUnit: 'kg',
+      packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
         mrpPaise: 125000,
       },
     });

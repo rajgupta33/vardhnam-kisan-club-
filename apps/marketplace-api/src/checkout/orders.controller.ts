@@ -20,6 +20,7 @@ import type { CurrentUser } from '../auth/current-user.interface';
 import { MockAuthGuard } from '../auth/mock-auth.guard';
 import { getRequestId } from '../common/middleware/correlation-id.middleware';
 import { CheckoutService } from './checkout.service';
+import { InvoiceDocumentsService } from './invoice-documents.service';
 import { CancelOrderDto } from './dto/cancel-order.dto';
 import { ListMyOrdersQueryDto } from './dto/list-my-orders-query.dto';
 
@@ -27,7 +28,10 @@ import { ListMyOrdersQueryDto } from './dto/list-my-orders-query.dto';
 @Controller('orders')
 @UseGuards(MockAuthGuard, PermissionsGuard)
 export class OrdersController {
-  constructor(private readonly checkoutService: CheckoutService) {}
+  constructor(
+    private readonly checkoutService: CheckoutService,
+    private readonly invoiceDocuments: InvoiceDocumentsService,
+  ) {}
 
   @Get()
   @RequirePermissions(PermissionCode.ORDERS_READ_OWN)
@@ -60,5 +64,34 @@ export class OrdersController {
     @CurrentUserContext() actor: CurrentUser,
   ) {
     return this.checkoutService.getMyOrder(orderId, actor);
+  }
+
+  @Post(':orderId/invoice/pdf')
+  @RequirePermissions(PermissionCode.ORDERS_READ_OWN)
+  requestMyInvoicePdf(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @CurrentUserContext() actor: CurrentUser,
+    @Req() request: Request,
+  ) {
+    return this.invoiceDocuments.request(orderId, actor, getRequestId(request));
+  }
+
+  @Get(':orderId/invoice/pdf')
+  @RequirePermissions(PermissionCode.ORDERS_READ_OWN)
+  getMyInvoicePdf(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @CurrentUserContext() actor: CurrentUser,
+  ) {
+    return this.invoiceDocuments.get(orderId, actor);
+  }
+
+  @Get(':orderId/invoice/pdf/download')
+  @RequirePermissions(PermissionCode.ORDERS_READ_OWN)
+  downloadMyInvoicePdf(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @CurrentUserContext() actor: CurrentUser,
+    @Req() request: Request,
+  ) {
+    return this.invoiceDocuments.getDownload(orderId, actor, getRequestId(request));
   }
 }

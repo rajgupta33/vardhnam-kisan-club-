@@ -16,6 +16,7 @@ export interface AccessTokenPayload {
 export interface SelectionTokenPayload {
   sub: string;
   purpose: 'membership-selection';
+  membershipIds: string[];
 }
 
 const SELECTION_TOKEN_TTL = '5m';
@@ -30,7 +31,9 @@ export class JwtTokenService {
   signAccessToken(payload: AccessTokenPayload): string {
     return this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
-      expiresIn: this.configService.getOrThrow<string>('JWT_ACCESS_TTL') as NonNullable<SignOptions['expiresIn']>,
+      expiresIn: this.configService.getOrThrow<string>('JWT_ACCESS_TTL') as NonNullable<
+        SignOptions['expiresIn']
+      >,
     });
   }
 
@@ -47,8 +50,12 @@ export class JwtTokenService {
     }
   }
 
-  signSelectionToken(userId: string): string {
-    const payload: SelectionTokenPayload = { sub: userId, purpose: 'membership-selection' };
+  signSelectionToken(userId: string, membershipIds: string[]): string {
+    const payload: SelectionTokenPayload = {
+      sub: userId,
+      purpose: 'membership-selection',
+      membershipIds,
+    };
     return this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: SELECTION_TOKEN_TTL,
@@ -60,7 +67,12 @@ export class JwtTokenService {
       const payload = this.jwtService.verify<SelectionTokenPayload>(token, {
         secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       });
-      if (payload.purpose !== 'membership-selection') {
+      if (
+        payload.purpose !== 'membership-selection' ||
+        !Array.isArray(payload.membershipIds) ||
+        payload.membershipIds.length === 0 ||
+        payload.membershipIds.some((membershipId) => typeof membershipId !== 'string')
+      ) {
         throw new Error('wrong token purpose');
       }
       return payload;

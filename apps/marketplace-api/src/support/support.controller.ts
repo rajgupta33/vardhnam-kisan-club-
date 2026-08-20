@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PermissionCode } from '../access/permission-codes';
@@ -143,5 +153,16 @@ export class SupportController {
     @Req() request: Request,
   ) {
     return this.supportService.reopenTicket(ticketId, dto, actor, getRequestId(request));
+  }
+
+  @Post('tickets/:ticketId/reopen-own')
+  @RequirePermissions(PermissionCode.SUPPORT_TICKETS_REOPEN_OWN)
+  reopenOwnTicket(
+    @Param('ticketId', ParseUUIDPipe) ticketId: string,
+    @Body() dto: SupportTicketActionDto,
+    @CurrentUserContext() actor: CurrentUser,
+    @Req() request: Request,
+  ) {
+    return this.supportService.reopenOwnTicket(ticketId, dto, actor, getRequestId(request));
   }
 }

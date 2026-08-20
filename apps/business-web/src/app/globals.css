@@ -14,6 +14,49 @@
   --focus: #1d4ed8;
 }
 
+.inspectionForm {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.inspectionForm fieldset {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.inspectionForm legend {
+  padding: 0 6px;
+  font-weight: 700;
+}
+
+.inspectionBatch {
+  display: grid;
+  gap: 8px;
+}
+
+.inspectionForm textarea {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  margin-top: 6px;
+}
+
+.fourColumn {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .fourColumn {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -485,7 +528,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -496,9 +540,20 @@ select {
 }
 
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   border-color: var(--focus);
   outline: 2px solid #bfdbfe;
+}
+
+.advisoryForm {
+  display: grid;
+  gap: 18px;
+}
+
+.advisoryForm textarea {
+  min-height: 140px;
+  resize: vertical;
 }
 
 .noticeBanner {
@@ -519,6 +574,18 @@ select:focus-visible {
 .noticeBanner.danger {
   border-color: #fecdca;
   color: var(--danger);
+}
+
+.noticeBanner.warn {
+  border-color: #fedf89;
+  color: #93370d;
+}
+
+.subPanel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 14px;
+  padding: 14px;
 }
 
 @media (max-width: 960px) {
@@ -575,4 +642,479 @@ select:focus-visible {
   .rejectForm {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Sidebar user section
+ * -------------------------------------------------------------------------*/
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.navList {
+  flex: 1;
+}
+
+.sidebarUser {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.sidebarUserInfo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sidebarUserAvatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sky);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.sidebarUserMeta {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sidebarUserPhone {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarUserRole {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.sidebarLogout {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.sidebarLogout:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: #fef3f2;
+}
+
+/* ---------------------------------------------------------------------------
+ * Login page
+ * -------------------------------------------------------------------------*/
+
+.loginPage {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f6f7f2 0%, #edf4ea 50%, #e8efe5 100%);
+}
+
+.loginContainer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: min(1040px, 96vw);
+  min-height: 640px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.06),
+    0 12px 24px -4px rgba(0, 0, 0, 0.1);
+}
+
+.loginBrand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+  background: linear-gradient(145deg, var(--field-green) 0%, #1d4a2b 60%, #163a22 100%);
+  color: #ffffff;
+}
+
+.loginBrandInner {
+  max-width: 380px;
+}
+
+.loginLogo {
+  display: inline-grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  font-size: 22px;
+  font-weight: 900;
+  margin-bottom: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.loginBrandTitle {
+  font-size: 28px;
+  font-weight: 800;
+  margin-bottom: 12px;
+  color: #ffffff;
+}
+
+.loginBrandSubtitle {
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.75);
+  margin-bottom: 32px;
+}
+
+.loginBrandFeatures {
+  display: grid;
+  gap: 14px;
+}
+
+.loginFeature {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.loginFeatureIcon {
+  font-size: 18px;
+}
+
+.loginFormPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+  background: #ffffff;
+}
+
+.loginFormInner {
+  width: 100%;
+  max-width: 360px;
+}
+
+.loginFormHeader {
+  margin-bottom: 28px;
+}
+
+.loginFormHeader h2 {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.loginFormSubheading {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+.loginForm {
+  display: grid;
+  gap: 18px;
+}
+
+.loginLabel {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.loginLabel input {
+  font-size: 15px;
+  padding: 12px 14px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.loginButton {
+  border: none;
+  border-radius: 10px;
+  background: var(--field-green);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 750;
+  padding: 14px;
+  text-align: center;
+  transition: all 0.15s;
+  margin-top: 4px;
+}
+
+.loginButton:hover:not(:disabled) {
+  background: #245632;
+}
+
+.loginButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.loginBackButton {
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px;
+  text-align: center;
+  transition: color 0.15s;
+}
+
+.loginBackButton:hover {
+  color: var(--ink);
+}
+
+.loginError {
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+  background: #fef3f2;
+  color: var(--danger);
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.loginFootnote {
+  margin-top: 20px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Org selection */
+
+.orgCandidateList {
+  display: grid;
+  gap: 8px;
+}
+
+.orgCandidate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: none;
+  font-size: 14px;
+}
+
+.orgCandidate:hover,
+.orgCandidate.selected {
+  border-color: var(--field-green);
+  background: #f0f7ed;
+}
+
+.orgCandidate input[type='radio'] {
+  accent-color: var(--field-green);
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.orgCandidateName {
+  display: block;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.orgCandidateRole {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+@media (max-width: 800px) {
+  .loginContainer {
+    grid-template-columns: 1fr;
+  }
+
+  .loginBrand {
+    padding: 32px 28px;
+  }
+
+  .loginBrandFeatures {
+    display: none;
+  }
+
+  .loginFormPanel {
+    padding: 32px 28px;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* WP-09r: cross-cutting components (table, pagination, confirm, loading) */
+/* ---------------------------------------------------------------------- */
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.paginationBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.paginationSummary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.paginationLinks {
+  display: flex;
+  gap: 8px;
+}
+
+.paginationLinks a,
+.paginationLinks span {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.paginationLinks a {
+  color: var(--field-green);
+}
+
+.paginationLinks a:hover,
+.paginationLinks a:focus-visible {
+  background: #edf4ea;
+  outline: none;
+}
+
+.paginationLinks span {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.secondaryButton {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+  padding: 8px 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.secondaryButton:hover,
+.secondaryButton:focus-visible {
+  border-color: var(--field-green);
+  color: var(--field-green);
+  outline: none;
+}
+
+.loadingShell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--background);
+}
+
+.loadingPanel {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.loadingSpinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--line);
+  border-top-color: var(--field-green);
+  border-radius: 50%;
+  animation: portalSpin 0.8s linear infinite;
+}
+
+@keyframes portalSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.errorPanel {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.errorPanel h1 {
+  margin-bottom: 8px;
+}
+
+.errorPanel .primaryButton {
+  margin-top: 16px;
 }

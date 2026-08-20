@@ -5,7 +5,7 @@ import { AuditController } from './audit.controller';
 import { AuditService } from './audit.service';
 
 @Module({
-  imports: [AccessModule, forwardRef(() => AuthModule)],
+  imports: [forwardRef(() => AccessModule), forwardRef(() => AuthModule)],
   controllers: [AuditController],
   providers: [AuditService],
   exports: [AuditService],

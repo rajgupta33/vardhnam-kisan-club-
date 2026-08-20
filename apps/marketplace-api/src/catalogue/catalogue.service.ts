@@ -34,6 +34,7 @@ import {
 import type { SubmitCatalogueItemDto } from './dto/submit-catalogue-item.dto';
 import type { UpdateBrandDto } from './dto/update-brand.dto';
 import type { UpdateProductDto } from './dto/update-product.dto';
+import type { UpdateProductVariantDto } from './dto/update-product-variant.dto';
 
 @Injectable()
 export class CatalogueService {
@@ -429,6 +430,9 @@ export class CatalogueService {
           packSize: new Prisma.Decimal(dto.packSize),
           packUnit: dto.packUnit,
           mrpPaise: dto.mrpPaise ?? null,
+          hsnCode: dto.hsnCode ?? null,
+          gstRateBps: dto.gstRateBps ?? null,
+          isActive: dto.isActive ?? true,
         },
       });
       await this.markApprovedProductDraftIfChanged(tx, product, actor, requestId, dto.reason);
@@ -442,6 +446,52 @@ export class CatalogueService {
       this.attachAuditContext(auditInput, requestId, dto.reason);
       await this.auditService.record(auditInput, tx);
 
+      return variant;
+    });
+  }
+
+  async updateProductVariant(
+    productId: string,
+    variantId: string,
+    dto: UpdateProductVariantDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const product = await this.findProductOrThrow(productId);
+    await this.ensureCatalogueWrite(actor, product.companyOrganisationId);
+    const existing = product.variants.find((variant) => variant.id === variantId);
+    if (!existing) {
+      throw new NotFoundException({
+        code: ApiErrorCode.NOT_FOUND,
+        message: 'Product variant was not found',
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const variant = await tx.productVariant.update({
+        where: { id: variantId },
+        data: {
+          ...(dto.sku !== undefined ? { sku: dto.sku } : {}),
+          ...(dto.variantName !== undefined ? { variantName: dto.variantName } : {}),
+          ...(dto.packSize !== undefined ? { packSize: new Prisma.Decimal(dto.packSize) } : {}),
+          ...(dto.packUnit !== undefined ? { packUnit: dto.packUnit } : {}),
+          ...(dto.mrpPaise !== undefined ? { mrpPaise: dto.mrpPaise } : {}),
+          ...(dto.hsnCode !== undefined ? { hsnCode: dto.hsnCode } : {}),
+          ...(dto.gstRateBps !== undefined ? { gstRateBps: dto.gstRateBps } : {}),
+          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+        },
+      });
+      await this.markApprovedProductDraftIfChanged(tx, product, actor, requestId, dto.reason);
+      const auditInput = this.withActor(actor, {
+        action: 'PRODUCT_VARIANT_UPDATED',
+        resourceType: 'ProductVariant',
+        resourceId: variant.id,
+        organisationId: product.companyOrganisationId,
+        previousValue: this.variantAuditValue(existing),
+        newValue: this.variantAuditValue(variant),
+      });
+      this.attachAuditContext(auditInput, requestId, dto.reason);
+      await this.auditService.record(auditInput, tx);
       return variant;
     });
   }
@@ -673,6 +723,13 @@ export class CatalogueService {
     }
     if (!product.variants.some((variant) => variant.isActive)) {
       missingRequirements.push('ACTIVE_VARIANT');
+    }
+    if (
+      product.variants.some(
+        (variant) => variant.isActive && (!variant.hsnCode || variant.gstRateBps === null),
+      )
+    ) {
+      missingRequirements.push('VARIANT_TAX_METADATA');
     }
     if (product.documents.length === 0) {
       missingRequirements.push('PRODUCT_DOCUMENT');
@@ -935,6 +992,8 @@ export class CatalogueService {
       packSize: variant.packSize.toString(),
       packUnit: variant.packUnit,
       mrpPaise: variant.mrpPaise,
+      hsnCode: variant.hsnCode,
+      gstRateBps: variant.gstRateBps,
       isActive: variant.isActive,
     };
   }

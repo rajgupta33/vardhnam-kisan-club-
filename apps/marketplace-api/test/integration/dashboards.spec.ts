@@ -259,6 +259,8 @@ async function seedDashboardData(): Promise<{
       variantName: '1 kg pack',
       packSize: 1,
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125_000,
     },
   });

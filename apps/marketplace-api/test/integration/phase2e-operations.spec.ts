@@ -265,6 +265,8 @@ async function seedOperationsData(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125000,
     },
   });

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { QueueService } from '../jobs/queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -15,6 +16,7 @@ export class HealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly queueService: QueueService,
   ) {}
 
   live() {
@@ -26,7 +28,7 @@ export class HealthService {
   }
 
   async ready(): Promise<{ status: CheckStatus; checks: ReadinessCheck[] }> {
-    const checks = await Promise.all([this.checkDatabase(), this.checkRedis()]);
+    const checks = await Promise.all([this.checkDatabase(), this.checkRedis(), this.checkQueues()]);
     const status = checks.every((check) => check.status === 'ok') ? 'ok' : 'error';
 
     return {
@@ -44,6 +46,24 @@ export class HealthService {
         name: 'postgres',
         status: 'error',
         message: error instanceof Error ? error.message : 'Unknown database error',
+      };
+    }
+  }
+
+  // The queue connection is separate from the health-ping client (BullMQ needs
+  // its own retry settings), so it can fail independently and is checked apart
+  // from `redis`.
+  private async checkQueues(): Promise<ReadinessCheck> {
+    try {
+      const reachable = await this.queueService.isReachable();
+      return reachable
+        ? { name: 'queues', status: 'ok' }
+        : { name: 'queues', status: 'error', message: 'Queue connection is not reachable' };
+    } catch (error) {
+      return {
+        name: 'queues',
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown queue error',
       };
     }
   }

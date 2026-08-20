@@ -146,7 +146,7 @@ describe('Support tickets', () => {
       .send({
         category: SupportTicketCategory.ORDER_ISSUE,
         subject: 'Not my order',
-        description: 'Trying to raise a ticket on someone else\'s order.',
+        description: "Trying to raise a ticket on someone else's order.",
         productOrderId: ownOrderId,
       })
       .expect(403);
@@ -173,10 +173,7 @@ describe('Support tickets', () => {
 
     await request(server).get('/api/v1/support/tickets').expect(401);
 
-    await request(server)
-      .get('/api/v1/support/tickets')
-      .set(seeded.farmerHeaders)
-      .expect(403);
+    await request(server).get('/api/v1/support/tickets').set(seeded.farmerHeaders).expect(403);
   });
 
   it('rejects assigning a ticket to a user without an active support-agent membership', async () => {
@@ -228,7 +225,9 @@ describe('Support tickets', () => {
       .send({ resolutionNote: 'Issue explained and confirmed resolved.' })
       .expect(201);
     expect(resolveResponse.body.data.status).toBe(SupportTicketStatus.RESOLVED);
-    expect(resolveResponse.body.data.resolutionNote).toBe('Issue explained and confirmed resolved.');
+    expect(resolveResponse.body.data.resolutionNote).toBe(
+      'Issue explained and confirmed resolved.',
+    );
 
     const closeResponse = await request(server)
       .post(`/api/v1/support/tickets/${ticketId}/close`)
@@ -245,6 +244,40 @@ describe('Support tickets', () => {
     expect(reopenResponse.body.data.status).toBe(SupportTicketStatus.REOPENED);
     expect(reopenResponse.body.data.resolvedAt).toBeNull();
     expect(reopenResponse.body.data.closedAt).toBeNull();
+
+    const notificationResponse = await request(server)
+      .get('/api/v1/notifications/me')
+      .query({ channel: 'IN_APP', limit: 100 })
+      .set(seeded.farmerHeaders)
+      .expect(200);
+    const ticketNotifications = (
+      notificationResponse.body.data.items as Array<{
+        category: string;
+        relatedResourceType: string | null;
+        relatedResourceId: string | null;
+        status: string;
+      }>
+    ).filter((notification) => notification.relatedResourceId === ticketId);
+    expect(ticketNotifications).toHaveLength(7);
+    expect(ticketNotifications).toEqual(
+      expect.arrayContaining(
+        [
+          'SUPPORT_TICKET_CREATED',
+          'SUPPORT_TICKET_ASSIGNED',
+          'SUPPORT_TICKET_WAITING_FOR_CUSTOMER',
+          'SUPPORT_TICKET_RESUMED',
+          'SUPPORT_TICKET_RESOLVED',
+          'SUPPORT_TICKET_CLOSED',
+          'SUPPORT_TICKET_REOPENED',
+        ].map((category) =>
+          expect.objectContaining({
+            category,
+            status: 'SENT',
+            relatedResourceType: 'SupportTicket',
+          }),
+        ),
+      ),
+    );
   });
 
   it('attaches evidence to a ticket', async () => {
@@ -285,6 +318,36 @@ describe('Support tickets', () => {
       .set(seeded.otherFarmerHeaders)
       .expect(200);
     expect(otherFarmerTicketsResponse.body.data.items).toHaveLength(0);
+  });
+
+  it('allows a farmer to reopen only their own resolved ticket', async () => {
+    const server = requireServer();
+    const ticketId = await createTicket(server, seeded.farmerHeaders);
+
+    await request(server)
+      .post(`/api/v1/support/tickets/${ticketId}/assign`)
+      .set(seeded.operationsHeaders)
+      .send({ assignedToUserId: seeded.supportAgentUserId })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/support/tickets/${ticketId}/resolve`)
+      .set(seeded.supportAgentHeaders)
+      .send({ resolutionNote: 'Resolved before farmer verification.' })
+      .expect(201);
+
+    await request(server)
+      .post(`/api/v1/support/tickets/${ticketId}/reopen-own`)
+      .set(seeded.otherFarmerHeaders)
+      .send({ reason: 'Attempting to reopen another farmer ticket' })
+      .expect(403);
+
+    const response = await request(server)
+      .post(`/api/v1/support/tickets/${ticketId}/reopen-own`)
+      .set(seeded.farmerHeaders)
+      .send({ reason: 'The issue is still happening' })
+      .expect(201);
+    expect(response.body.data.status).toBe(SupportTicketStatus.REOPENED);
+    expect(response.body.data.resolvedAt).toBeNull();
   });
 
   async function createTicket(
@@ -363,6 +426,8 @@ async function seedSupportTicketData(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125_000,
     },
   });
@@ -414,6 +479,7 @@ async function seedSupportTicketData(): Promise<{
       addressLine1: 'Khasra 45, Rampura Road',
       city: 'Jaipur',
       state: 'Rajasthan',
+      stateCode: '08',
       pincode: '302001',
       isDefault: true,
     },
@@ -532,6 +598,8 @@ async function createOrganisation(input: {
       legalName: input.legalName,
       displayName: input.displayName,
       gstin: input.gstin ?? null,
+      registeredStateCode: input.gstin?.slice(0, 2) ?? null,
+      gstinVerifiedAt: input.gstin ? new Date() : null,
       status: OrganisationStatus.ACTIVE,
     },
   });

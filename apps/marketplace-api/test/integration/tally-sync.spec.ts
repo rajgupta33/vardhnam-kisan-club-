@@ -76,7 +76,10 @@ describe('Tally sync abstraction', () => {
     const response = await request(requireServer())
       .post('/api/v1/tally/sync-records')
       .set(seeded.financeManagerHeaders)
-      .send({ recordType: TallySyncRecordType.PARTY_MASTER, organisationId: seeded.distributorOrganisationId })
+      .send({
+        recordType: TallySyncRecordType.PARTY_MASTER,
+        organisationId: seeded.distributorOrganisationId,
+      })
       .expect(201);
     expect(response.body.data.status).toBe(TallySyncStatus.PENDING);
     expect(response.body.data.referenceLabelSnapshot).toBe(seeded.distributorLegalName);
@@ -86,7 +89,10 @@ describe('Tally sync abstraction', () => {
     const response = await request(requireServer())
       .post('/api/v1/tally/sync-records')
       .set(seeded.financeManagerHeaders)
-      .send({ recordType: TallySyncRecordType.ITEM_MASTER, productVariantId: seeded.productVariantId })
+      .send({
+        recordType: TallySyncRecordType.ITEM_MASTER,
+        productVariantId: seeded.productVariantId,
+      })
       .expect(201);
     expect(response.body.data.recordType).toBe(TallySyncRecordType.ITEM_MASTER);
   });
@@ -245,9 +251,15 @@ describe('Tally sync abstraction', () => {
       .get('/api/v1/tally/reconciliation')
       .set(seeded.financeManagerHeaders)
       .expect(200);
-    const groups = response.body.data as Array<{ recordType: string; status: string; count: number }>;
+    const groups = response.body.data as Array<{
+      recordType: string;
+      status: string;
+      count: number;
+    }>;
     expect(groups.length).toBeGreaterThan(0);
-    expect(groups.some((group) => group.status === TallySyncStatus.SYNCED && group.count > 0)).toBe(true);
+    expect(groups.some((group) => group.status === TallySyncStatus.SYNCED && group.count > 0)).toBe(
+      true,
+    );
   });
 
   it('enforces permissions across roles', async () => {
@@ -255,10 +267,7 @@ describe('Tally sync abstraction', () => {
 
     await request(server).get('/api/v1/tally/sync-records').expect(401);
 
-    await request(server)
-      .get('/api/v1/tally/sync-records')
-      .set(seeded.farmerHeaders)
-      .expect(403);
+    await request(server).get('/api/v1/tally/sync-records').set(seeded.farmerHeaders).expect(403);
     await request(server)
       .post('/api/v1/tally/sync-records')
       .set(seeded.farmerHeaders)
@@ -286,7 +295,11 @@ describe('Tally sync abstraction', () => {
     await request(server)
       .post('/api/v1/tally/sync-records')
       .set(seeded.financeManagerHeaders)
-      .send({ recordType: TallySyncRecordType.VOUCHER, referenceLabel: 'Permission check voucher', payload: {} })
+      .send({
+        recordType: TallySyncRecordType.VOUCHER,
+        referenceLabel: 'Permission check voucher',
+        payload: {},
+      })
       .expect(201);
   });
 });
@@ -318,9 +331,15 @@ async function seedTallySyncData(): Promise<{
     legalName: 'Tally Sync Admin Organisation',
     displayName: 'Tally Sync Admin',
   });
-  const financeManagerUser = await createUser(`tally-finance-${suffix}@example.local`, 'Tally Finance Manager');
+  const financeManagerUser = await createUser(
+    `tally-finance-${suffix}@example.local`,
+    'Tally Finance Manager',
+  );
   await createMembership(financeManagerUser.id, adminOrganisation.id, PlatformRole.FINANCE_MANAGER);
-  const operationsUser = await createUser(`tally-ops-${suffix}@example.local`, 'Tally Operations Manager');
+  const operationsUser = await createUser(
+    `tally-ops-${suffix}@example.local`,
+    'Tally Operations Manager',
+  );
   await createMembership(operationsUser.id, adminOrganisation.id, PlatformRole.OPERATIONS_MANAGER);
 
   const distributorOrganisation = await createOrganisation({
@@ -334,7 +353,11 @@ async function seedTallySyncData(): Promise<{
     `tally-distributor-${suffix}@example.local`,
     'Tally Sync Distributor Owner',
   );
-  await createMembership(distributorUser.id, distributorOrganisation.id, PlatformRole.DISTRIBUTOR_OWNER);
+  await createMembership(
+    distributorUser.id,
+    distributorOrganisation.id,
+    PlatformRole.DISTRIBUTOR_OWNER,
+  );
 
   const farmerOrganisation = await createOrganisation({
     type: OrganisationType.VARDHNAM,
@@ -366,6 +389,7 @@ async function seedTallySyncData(): Promise<{
       addressLine1: 'Khasra 12, Station Road',
       city: 'Jaipur',
       state: 'Rajasthan',
+      stateCode: '08',
       pincode: '302001',
       isDefault: true,
     },
@@ -401,6 +425,8 @@ async function seedTallySyncData(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125_000,
     },
   });
@@ -412,6 +438,7 @@ async function seedTallySyncData(): Promise<{
       serviceablePincode: '302001',
       status: ProductCheckoutStatus.PAID,
       subtotalPaise: 118_000,
+      farmerPayablePaise: 118_000,
       itemCount: 1,
       childOrderCount: 1,
     },
@@ -429,6 +456,7 @@ async function seedTallySyncData(): Promise<{
       sellerGstinSnapshot: distributorOrganisation.gstin,
       deliveryAddressSnapshot: { city: 'Jaipur', pincode: '302001' },
       subtotalPaise: 118_000,
+      farmerPayablePaise: 118_000,
       itemCount: 1,
     },
   });
@@ -441,6 +469,7 @@ async function seedTallySyncData(): Promise<{
       sellerOrganisationId: distributorOrganisation.id,
       invoiceNumber: `TLY-INV-${short}`,
       subtotalPaise: productInvoiceTotalPaise,
+      taxableAmountPaise: productInvoiceTotalPaise,
       totalPaise: productInvoiceTotalPaise,
       itemCount: 1,
       sellerLegalNameSnapshot: distributorOrganisation.legalName,
@@ -448,7 +477,9 @@ async function seedTallySyncData(): Promise<{
       sellerGstinSnapshot: distributorOrganisation.gstin,
       farmerNameSnapshot: 'Tally Sync Farmer',
       deliveryAddressSnapshot: { city: 'Jaipur', pincode: '302001' },
-      lineItemsSnapshot: [{ variantId: productVariant.id, quantity: 1, pricePaise: productInvoiceTotalPaise }],
+      lineItemsSnapshot: [
+        { variantId: productVariant.id, quantity: 1, pricePaise: productInvoiceTotalPaise },
+      ],
     },
   });
 
@@ -513,10 +544,22 @@ async function seedTallySyncData(): Promise<{
   });
 
   return {
-    financeManagerHeaders: headersFor(financeManagerUser.id, PlatformRole.FINANCE_MANAGER, adminOrganisation.id),
-    operationsHeaders: headersFor(operationsUser.id, PlatformRole.OPERATIONS_MANAGER, adminOrganisation.id),
+    financeManagerHeaders: headersFor(
+      financeManagerUser.id,
+      PlatformRole.FINANCE_MANAGER,
+      adminOrganisation.id,
+    ),
+    operationsHeaders: headersFor(
+      operationsUser.id,
+      PlatformRole.OPERATIONS_MANAGER,
+      adminOrganisation.id,
+    ),
     farmerHeaders: headersFor(farmerUser.id, PlatformRole.FARMER, farmerOrganisation.id),
-    distributorHeaders: headersFor(distributorUser.id, PlatformRole.DISTRIBUTOR_OWNER, distributorOrganisation.id),
+    distributorHeaders: headersFor(
+      distributorUser.id,
+      PlatformRole.DISTRIBUTOR_OWNER,
+      distributorOrganisation.id,
+    ),
     distributorOrganisationId: distributorOrganisation.id,
     distributorLegalName: distributorOrganisation.legalName,
     productVariantId: productVariant.id,
@@ -554,6 +597,8 @@ async function createOrganisation(input: {
       legalName: input.legalName,
       displayName: input.displayName,
       gstin: input.gstin ?? null,
+      registeredStateCode: input.gstin?.slice(0, 2) ?? null,
+      gstinVerifiedAt: input.gstin ? new Date() : null,
       status: OrganisationStatus.ACTIVE,
     },
   });
@@ -568,7 +613,11 @@ async function createUser(email: string, displayName: string) {
   });
 }
 
-async function createMembership(userId: string, organisationId: string, role: PlatformRole): Promise<void> {
+async function createMembership(
+  userId: string,
+  organisationId: string,
+  role: PlatformRole,
+): Promise<void> {
   await prisma.organisationMembership.create({
     data: {
       userId,

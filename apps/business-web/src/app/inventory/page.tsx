@@ -1,6 +1,10 @@
 import Link from 'next/link';
 import type { InventoryBatch, Warehouse, WarehouseStatus } from '@vardhnam/api-client';
 import { BusinessShell } from '../../components/business-shell';
+import { DataTable, type DataTableColumn } from '../../components/data-table';
+import { EmptyState } from '../../components/empty-state';
+import { Pagination } from '../../components/pagination';
+import { StatusBadge } from '../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../lib/format';
 import { loadInventoryBatches, loadWarehouses } from '../../lib/marketplace-api';
 
@@ -13,28 +17,33 @@ interface InventoryPageProps {
 }
 
 const warehouseStatusValues: WarehouseStatus[] = ['ACTIVE', 'INACTIVE', 'BLOCKED'];
+const limit = 25;
 
 export default async function InventoryPage({ searchParams }: InventoryPageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const status = parseWarehouseStatus(readParam(resolvedSearchParams.status));
   const q = readParam(resolvedSearchParams.q);
+  const warehousePage = parsePage(readParam(resolvedSearchParams.warehousePage));
+  const batchPage = parsePage(readParam(resolvedSearchParams.batchPage));
   const warehouseQuery = {
     ...(status ? { status } : {}),
     ...(q ? { q } : {}),
-    page: 1,
-    limit: 25,
+    page: warehousePage,
+    limit,
   };
   const batchQuery = {
     ...(q ? { q } : {}),
-    page: 1,
-    limit: 25,
+    page: batchPage,
+    limit,
   };
   const [warehouseResult, batchResult] = await Promise.all([
     loadWarehouses(warehouseQuery),
     loadInventoryBatches(batchQuery),
   ]);
   const warehouses = warehouseResult.ok ? warehouseResult.data.items : [];
+  const warehouseTotal = warehouseResult.ok ? warehouseResult.data.total : 0;
   const batches = batchResult.ok ? batchResult.data.items : [];
+  const batchTotal = batchResult.ok ? batchResult.data.total : 0;
   const onHandQuantity = batches.reduce((total, batch) => total + batch.onHandQuantity, 0);
   const sellableQuantity = batches.reduce((total, batch) => total + batch.sellableQuantity, 0);
   const connectionError = !warehouseResult.ok
@@ -44,7 +53,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
       : undefined;
   const statuses = [
     {
-      label: warehouseResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: warehouseResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: warehouseResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -80,13 +89,13 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
         <div className="segmentedControl">
           <FilterLink
             active={!status}
-            href={buildInventoryHref(undefined, q)}
+            href={buildInventoryHref(undefined, q, 1, 1)}
             label="All Warehouses"
           />
           {warehouseStatusValues.map((statusValue) => (
             <FilterLink
               active={status === statusValue}
-              href={buildInventoryHref(statusValue, q)}
+              href={buildInventoryHref(statusValue, q, 1, 1)}
               key={statusValue}
               label={labelFromCode(statusValue)}
             />
@@ -102,10 +111,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
       </section>
 
       {connectionError ? (
-        <section className="emptyState">
-          <h3>Inventory API Connection Blocked</h3>
-          <p className="mutedText">{connectionError}</p>
-        </section>
+        <EmptyState description={connectionError} title="Inventory API Connection Blocked" />
       ) : (
         <>
           <div className="breadcrumbRow">
@@ -122,15 +128,21 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
               </div>
             </div>
             {warehouses.length === 0 ? (
-              <article className="emptyState">
-                <h3>No warehouses</h3>
-                <p className="mutedText">Distributor warehouse records will appear here.</p>
-              </article>
+              <EmptyState
+                description="Distributor warehouse records will appear here."
+                title="No warehouses"
+              />
             ) : (
               warehouses.map((warehouse) => (
                 <WarehouseCard key={warehouse.id} warehouse={warehouse} />
               ))
             )}
+            <Pagination
+              buildHref={(targetPage) => buildInventoryHref(status, q, targetPage, batchPage)}
+              limit={limit}
+              page={warehousePage}
+              total={warehouseTotal}
+            />
           </section>
 
           <section className="panel" aria-label="Batch inventory">
@@ -141,6 +153,12 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
               </div>
             </div>
             <BatchTable batches={batches} />
+            <Pagination
+              buildHref={(targetPage) => buildInventoryHref(status, q, warehousePage, targetPage)}
+              limit={limit}
+              page={batchPage}
+              total={batchTotal}
+            />
           </section>
         </>
       )}
@@ -159,9 +177,10 @@ function WarehouseCard({ warehouse }: { warehouse: Warehouse }) {
             </p>
             <h3>{warehouse.name}</h3>
           </div>
-          <span className={`statusBadge ${statusTone(warehouse.status)}`}>
-            {labelFromCode(warehouse.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(warehouse.status)}
+            tone={statusTone(warehouse.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Code" value={warehouse.code} />
@@ -177,49 +196,48 @@ function WarehouseCard({ warehouse }: { warehouse: Warehouse }) {
 }
 
 function BatchTable({ batches }: { batches: InventoryBatch[] }) {
-  if (batches.length === 0) {
-    return <p className="mutedText">No batch stock records match the current filters.</p>;
-  }
+  const columns: DataTableColumn<InventoryBatch>[] = [
+    { key: 'batch', header: 'Batch', render: (batch) => batch.batchNumber },
+    {
+      key: 'product',
+      header: 'Product',
+      render: (batch) => (
+        <>
+          {batch.product.name}
+          <br />
+          <span className="mutedText">{batch.variant.variantName}</span>
+        </>
+      ),
+    },
+    {
+      key: 'warehouse',
+      header: 'Warehouse',
+      render: (batch) => batch.warehouse?.name ?? 'Not recorded',
+    },
+    { key: 'expiry', header: 'Expiry', render: (batch) => formatDateTime(batch.expiryDate) },
+    { key: 'onHand', header: 'On hand', render: (batch) => batch.onHandQuantity },
+    { key: 'sellable', header: 'Sellable', render: (batch) => batch.sellableQuantity },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (batch) => (
+        <StatusBadge
+          label={batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
+          tone={batch.isExpired ? 'danger' : statusTone(batch.status)}
+        />
+      ),
+    },
+  ];
 
   return (
-    <div className="tableShell">
-      <table>
-        <thead>
-          <tr>
-            <th>Batch</th>
-            <th>Product</th>
-            <th>Warehouse</th>
-            <th>Expiry</th>
-            <th>On hand</th>
-            <th>Sellable</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {batches.map((batch) => (
-            <tr key={batch.id}>
-              <td>{batch.batchNumber}</td>
-              <td>
-                {batch.product.name}
-                <br />
-                <span className="mutedText">{batch.variant.variantName}</span>
-              </td>
-              <td>{batch.warehouse?.name ?? 'Not recorded'}</td>
-              <td>{formatDateTime(batch.expiryDate)}</td>
-              <td>{batch.onHandQuantity}</td>
-              <td>{batch.sellableQuantity}</td>
-              <td>
-                <span
-                  className={`statusBadge ${batch.isExpired ? 'danger' : statusTone(batch.status)}`}
-                >
-                  {batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      caption="Batch stock snapshot"
+      columns={columns}
+      emptyDescription="Batch stock records matching the current filters will appear here."
+      emptyTitle="No batch stock records"
+      rowKey={(batch) => batch.id}
+      rows={batches}
+    />
   );
 }
 
@@ -244,7 +262,12 @@ function DetailField({ label, value }: { label: string; value: string | null | u
   );
 }
 
-function buildInventoryHref(status: WarehouseStatus | undefined, q: string | undefined): string {
+function buildInventoryHref(
+  status: WarehouseStatus | undefined,
+  q: string | undefined,
+  warehousePage: number,
+  batchPage: number,
+): string {
   const params = new URLSearchParams();
   if (status) {
     params.set('status', status);
@@ -252,12 +275,25 @@ function buildInventoryHref(status: WarehouseStatus | undefined, q: string | und
   if (q) {
     params.set('q', q);
   }
+  if (warehousePage > 1) {
+    params.set('warehousePage', String(warehousePage));
+  }
+  if (batchPage > 1) {
+    params.set('batchPage', String(batchPage));
+  }
 
   const value = params.toString();
   return value ? `/inventory?${value}` : '/inventory';
 }
 
-function statusTone(status: WarehouseStatus | 'ACTIVE' | 'BLOCKED' | 'EXPIRED' | 'INACTIVE') {
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function statusTone(
+  status: WarehouseStatus | 'ACTIVE' | 'BLOCKED' | 'EXPIRED' | 'INACTIVE',
+): 'ok' | 'warn' | 'danger' {
   if (status === 'ACTIVE') {
     return 'ok';
   }

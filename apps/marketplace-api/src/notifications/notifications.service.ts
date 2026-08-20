@@ -1,4 +1,10 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { NotificationStatus, Prisma, type Notification } from '@prisma/client';
 import { AccessService } from '../access/access.service';
 import { PermissionCode } from '../access/permission-codes';
@@ -7,10 +13,15 @@ import type { CurrentUser } from '../auth/current-user.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
 import { PrismaService } from '../prisma/prisma.service';
-import { ConfirmNotificationAttemptDto, NotificationOutcome } from './dto/confirm-notification-attempt.dto';
+import {
+  ConfirmNotificationAttemptDto,
+  NotificationOutcome,
+} from './dto/confirm-notification-attempt.dto';
 import type { CreateNotificationDto } from './dto/create-notification.dto';
 import type { ListMyNotificationsQueryDto } from './dto/list-my-notifications-query.dto';
 import type { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
+import type { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import { isOptOutable, optOutableCategories } from './notification-categories';
 
 @Injectable()
 export class NotificationsService {
@@ -69,7 +80,10 @@ export class NotificationsService {
     requestId?: string,
   ) {
     const notification = await this.findNotificationOrThrow(id);
-    if (notification.status !== NotificationStatus.PENDING && notification.status !== NotificationStatus.FAILED) {
+    if (
+      notification.status !== NotificationStatus.PENDING &&
+      notification.status !== NotificationStatus.FAILED
+    ) {
       throw new ConflictException({
         code: ApiErrorCode.CONFLICT,
         message: `Notification cannot be attempted from status ${notification.status}`,
@@ -78,12 +92,13 @@ export class NotificationsService {
 
     const isSuccess = dto.outcome === NotificationOutcome.SENT;
     const attemptNumber = notification.attemptCount + 1;
-    const errorCode = isSuccess ? null : dto.errorCode ?? 'MOCK_NOTIFICATION_SEND_FAILED';
+    const errorCode = isSuccess ? null : (dto.errorCode ?? 'MOCK_NOTIFICATION_SEND_FAILED');
     const errorMessage = isSuccess
       ? null
-      : dto.errorMessage ?? 'Mock notification delivery failed for local testing';
+      : (dto.errorMessage ?? 'Mock notification delivery failed for local testing');
     const providerReferenceId = isSuccess
-      ? dto.providerReferenceId ?? `MOCK-${notification.channel}-${notification.id.slice(0, 8).toUpperCase()}`
+      ? (dto.providerReferenceId ??
+        `MOCK-${notification.channel}-${notification.id.slice(0, 8).toUpperCase()}`)
       : notification.providerReferenceId;
 
     return this.prisma.$transaction(async (tx) => {
@@ -156,6 +171,92 @@ export class NotificationsService {
 
       return updated;
     });
+  }
+
+  /**
+   * The caller's notification preferences, plus what they are allowed to change.
+   *
+   * Only categories the platform classes as optional appear as adjustable;
+   * transactional messages are the record of a transaction the recipient is
+   * party to, and silencing an order, refund or security message would leave
+   * them unable to act on it.
+   */
+  async getMyPreferences(actor: CurrentUser) {
+    const preferences = await this.prisma.notificationPreference.findMany({
+      where: { userId: actor.userId },
+      orderBy: [{ category: 'asc' }, { channel: 'asc' }],
+    });
+
+    return {
+      preferences: preferences.map((preference) => ({
+        category: preference.category,
+        channel: preference.channel,
+        enabled: preference.enabled,
+      })),
+      optOutableCategories,
+    };
+  }
+
+  async updateMyPreferences(
+    dto: UpdateNotificationPreferencesDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const rejected = dto.preferences.filter(
+      (preference) => !preference.enabled && !isOptOutable(preference.category),
+    );
+
+    if (rejected.length > 0) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Transactional notification categories cannot be disabled',
+        details: {
+          rejectedCategories: [...new Set(rejected.map((preference) => preference.category))],
+          optOutableCategories,
+        },
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const preference of dto.preferences) {
+        await tx.notificationPreference.upsert({
+          where: {
+            userId_category_channel: {
+              userId: actor.userId,
+              category: preference.category,
+              channel: preference.channel,
+            },
+          },
+          create: {
+            userId: actor.userId,
+            category: preference.category,
+            channel: preference.channel,
+            enabled: preference.enabled,
+          },
+          update: { enabled: preference.enabled },
+        });
+      }
+
+      await this.auditService.record(
+        this.withActor(actor, {
+          action: 'NOTIFICATION_PREFERENCES_UPDATED',
+          resourceType: 'NotificationPreference',
+          resourceId: actor.userId,
+          newValue: {
+            preferences: dto.preferences.map((preference) => ({
+              category: preference.category,
+              channel: preference.channel,
+              enabled: preference.enabled,
+            })),
+          } as Prisma.InputJsonObject,
+          requestId,
+          reason: 'Recipient updated notification preferences',
+        }),
+        tx,
+      );
+    });
+
+    return this.getMyPreferences(actor);
   }
 
   async listNotifications(query: ListNotificationsQueryDto) {

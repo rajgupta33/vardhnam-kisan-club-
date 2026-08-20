@@ -360,7 +360,9 @@ export class InventoryService {
     if (
       dto.movementType === InventoryMovementType.OPENING_STOCK ||
       dto.movementType === InventoryMovementType.RESERVED_FOR_ORDER ||
-      dto.movementType === InventoryMovementType.RELEASED_FROM_ORDER
+      dto.movementType === InventoryMovementType.RELEASED_FROM_ORDER ||
+      dto.movementType === InventoryMovementType.RETURN_QUARANTINED ||
+      dto.movementType === InventoryMovementType.RETURN_RESTOCKED
     ) {
       throw new BadRequestException({
         code: ApiErrorCode.VALIDATION_FAILED,

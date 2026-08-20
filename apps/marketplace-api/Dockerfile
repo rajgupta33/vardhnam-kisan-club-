@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1
+#
+# Marketplace API and worker.
+#
+# One image serves both processes: they are the same Nest application and differ
+# only in entrypoint (`main.js` listens for HTTP, `worker.js` consumes queues).
+# Building them separately would let the two drift apart in dependencies while
+# still sharing a database and a job payload format.
+#
+# Build from the REPOSITORY ROOT, not from this directory -- the lockfile that
+# makes the install reproducible lives there:
+#
+#   docker build -f apps/marketplace-api/Dockerfile -t vardhnam-api .
+
+# ---------------------------------------------------------------------------
+# deps -- full install, including dev dependencies needed to compile
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS deps
+WORKDIR /app
+
+# Debian rather than Alpine: Prisma's query engine needs OpenSSL and glibc, and
+# the musl builds are a recurring source of "engine not found" failures.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Only the manifests first, so the install layer is cached until a dependency
+# actually changes. The API declares no `@vardhnam/*` workspace dependency, so
+# no other workspace manifest is needed here.
+COPY package.json package-lock.json ./
+COPY apps/marketplace-api/package.json apps/marketplace-api/
+
+RUN npm ci --workspace @vardhnam/marketplace-api --include-workspace-root
+
+# ---------------------------------------------------------------------------
+# build -- generate the Prisma client and compile TypeScript
+# ---------------------------------------------------------------------------
+FROM deps AS build
+WORKDIR /app
+
+# The API's tsconfig extends this. Without it TypeScript silently falls back to
+# its own defaults -- ES5 target, no `esModuleInterop` -- and the build fails
+# with dozens of errors that look nothing like a missing file.
+COPY tsconfig.base.json ./
+
+COPY apps/marketplace-api/ apps/marketplace-api/
+
+# Generate before compiling: the build imports types from the generated client.
+RUN npm --workspace @vardhnam/marketplace-api run prisma:generate \
+  && npm --workspace @vardhnam/marketplace-api run build
+
+# ---------------------------------------------------------------------------
+# migrator -- keeps the Prisma CLI, which the runtime image deliberately drops
+# ---------------------------------------------------------------------------
+# Migrations are a deployment step, not something a serving process should do on
+# boot: with more than one replica, concurrent `migrate deploy` calls race, and a
+# failed migration should stop a rollout rather than crash-loop a pod. Run this
+# image to completion before rolling the API and worker forward.
+FROM build AS migrator
+WORKDIR /app/apps/marketplace-api
+CMD ["npm", "run", "prisma:deploy"]
+
+# ---------------------------------------------------------------------------
+# runtime -- production dependencies and compiled output only
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS runtime
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+COPY apps/marketplace-api/package.json apps/marketplace-api/
+
+RUN npm ci --omit=dev --workspace @vardhnam/marketplace-api --include-workspace-root \
+  && npm cache clean --force
+
+# The generated Prisma client is a build artefact, not a package: `npm ci` alone
+# leaves `@prisma/client` unusable because generation never ran here. Copying it
+# from the build stage avoids shipping the Prisma CLI just to regenerate it.
+COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
+
+COPY --from=build /app/apps/marketplace-api/dist apps/marketplace-api/dist
+# Schema and migrations travel with the image so the migrator stage above and
+# this image are always the same version of both.
+COPY --from=build /app/apps/marketplace-api/prisma apps/marketplace-api/prisma
+
+# The base image ships an unprivileged `node` user; nothing here needs root.
+USER node
+
+WORKDIR /app/apps/marketplace-api
+EXPOSE 3001
+
+# Liveness only. Readiness (`/health/ready`, which checks the database, Redis and
+# queues) belongs to the orchestrator, because a dependency being briefly
+# unreachable should stop traffic being routed here -- not kill the container.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/'+(process.env.API_PREFIX||'api/v1')+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Overridden to `dist/src/worker.js` for the queue consumer -- see the `worker`
+# service in docker-compose.yml.
+CMD ["node", "dist/src/main.js"]

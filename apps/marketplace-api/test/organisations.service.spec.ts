@@ -35,11 +35,18 @@ describe('OrganisationsService', () => {
         type: OrganisationType.DISTRIBUTOR,
         legalName: 'Demo Distributor Private Limited',
         displayName: 'Demo Distributor',
+        gstin: '08abcde1234f1z5',
       },
       actor,
     );
 
     expect(result.id).toBe('org-1');
+    expect(tx.organisation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        gstin: '08ABCDE1234F1Z5',
+        registeredStateCode: '08',
+      }),
+    });
     expect(auditService.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'ORGANISATION_CREATED',
@@ -185,5 +192,29 @@ describe('OrganisationsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.organisation.update).not.toHaveBeenCalled();
     expect(auditService.record).not.toHaveBeenCalled();
+  });
+
+  it('blocks distributor approval without a structurally valid GSTIN', async () => {
+    const existing = {
+      id: 'org-1',
+      type: OrganisationType.DISTRIBUTOR,
+      gstin: null,
+      status: 'PENDING_VERIFICATION',
+      reviewedAt: null,
+      reviewedByUserId: null,
+      reviewReason: null,
+      registeredStateCode: null,
+      gstinVerifiedAt: null,
+    };
+    const prisma = { organisation: { findUnique: jest.fn().mockResolvedValue(existing) } };
+    const service = new OrganisationsService(prisma as never, { record: jest.fn() } as never);
+
+    await expect(
+      service.review(
+        existing.id,
+        { decision: OrganisationReviewDecision.APPROVE, reason: 'Verified' },
+        actor,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

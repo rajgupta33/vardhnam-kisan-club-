@@ -124,6 +124,8 @@ describe('Phase 3A farmer profile, address and cart foundation', () => {
         quantity: 2,
         priceSnapshotPaise: 118000,
         availableQuantitySnapshot: 6,
+        minimumOrderQuantity: 1,
+        maximumOrderQuantity: 6,
         serviceablePincodeSnapshot: '302001',
       }),
     );
@@ -290,6 +292,8 @@ async function seedFarmerCartData(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125000,
     },
   });

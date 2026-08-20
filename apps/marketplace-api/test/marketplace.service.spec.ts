@@ -93,6 +93,57 @@ describe('MarketplaceService', () => {
     });
   });
 
+  it('does not fall back to public discovery when programme eligibility is empty', async () => {
+    const { prisma, service } = createService();
+    const result = await service.listProducts(
+      { pincode: '302001', page: 1, limit: 20 },
+      { programmeEligibility: [] },
+    );
+
+    expect(result).toEqual({ items: [], page: 1, limit: 20, total: 0 });
+    expect(prisma.distributorOffer.findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns stocked filter options for the requested pincode', async () => {
+    const { prisma, service } = createService();
+    prisma.distributorOffer.findMany.mockResolvedValue([
+      offerFixture({ id: 'offer-1' }),
+    ]);
+    prisma.inventoryBatch.findMany.mockResolvedValue([
+      batchFixture({ balanceAfter: 12 }),
+    ]);
+
+    const result = await service.getFilterOptions({ pincode: '302001' });
+
+    expect(result).toEqual({
+      categories: ['Seeds'],
+      brands: [{ id: 'brand-1', name: 'Demo Seeds', slug: 'demo-seeds' }],
+      cropTargets: ['Bajra'],
+    });
+  });
+
+  it('applies an exact crop target filter to discovery', async () => {
+    const { prisma, service } = createService();
+    prisma.distributorOffer.findMany.mockResolvedValue([]);
+
+    await service.listProducts({
+      pincode: '302001',
+      cropTarget: 'Bajra',
+      page: 1,
+      limit: 20,
+    });
+
+    expect(prisma.distributorOffer.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          product: expect.objectContaining({
+            cropTargets: { has: 'Bajra' },
+          }),
+        }),
+      }),
+    );
+  });
+
   it('excludes offers when only blocked or expired stock would otherwise exist', async () => {
     const { prisma, service } = createService();
     prisma.distributorOffer.findMany.mockResolvedValue([offerFixture({ id: 'offer-1' })]);
@@ -190,9 +241,21 @@ function createService(): {
     },
   };
 
+  // Discovery projections now carry a product image URL, so the service needs
+  // configuration and a storage provider. Neither is exercised by these unit
+  // tests -- the products they build have no image.
+  const configService = {
+    get: jest.fn((key: string) =>
+      key === 'PUBLIC_API_BASE_URL' ? 'http://localhost:3001' : 'api/v1',
+    ),
+  };
+  const storage = {
+    getDownloadUrl: jest.fn(),
+  };
+
   return {
     prisma,
-    service: new MarketplaceService(prisma as never),
+    service: new MarketplaceService(prisma as never, configService as never, storage as never),
   };
 }
 

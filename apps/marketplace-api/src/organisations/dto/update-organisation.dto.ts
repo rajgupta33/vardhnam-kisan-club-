@@ -23,8 +23,7 @@ export class UpdateOrganisationDto {
 
   @ApiPropertyOptional({ example: '27ABCDE1234F1Z5' })
   @IsOptional()
-  @IsString()
-  @MaxLength(20)
+  @Matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i)
   gstin?: string;
 
   @ApiPropertyOptional({ example: 'Corrected legal profile from verification document.' })

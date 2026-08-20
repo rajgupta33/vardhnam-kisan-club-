@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import {
   CatalogueStatus,
   DistributorOfferStatus,
+  DeliveryPartnerAvailabilityStatus,
   FulfilmentMode,
   InventoryMovementType,
   KycDocumentStatus,
@@ -16,6 +17,11 @@ import {
   ProductCheckoutStatus,
   ProductDocumentType,
   ProductOrderStatus,
+  ReturnInspectionOutcome,
+  ReturnReasonCode,
+  StoredFilePurpose,
+  StoredFileScanResult,
+  StoredFileStatus,
 } from '@prisma/client';
 import request from 'supertest';
 import { permissionDefinitions, rolePermissions } from '../../src/access/permission-codes';
@@ -23,10 +29,12 @@ import { AppModule } from '../../src/app.module';
 import { ApiExceptionFilter } from '../../src/common/filters/api-exception.filter';
 import { ResponseEnvelopeInterceptor } from '../../src/common/interceptors/response-envelope.interceptor';
 import { correlationIdMiddleware } from '../../src/common/middleware/correlation-id.middleware';
+import { createJobEnvelope } from '../../src/jobs/job-envelope';
 import { CatalogueReviewDecision } from '../../src/catalogue/dto/review-catalogue-item.dto';
 import { OfferReviewDecision } from '../../src/offers/dto/review-offer.dto';
 import { OrganisationReviewDecision } from '../../src/organisations/dto/review-organisation.dto';
 import { MockPaymentOutcome } from '../../src/payments/dto/confirm-mock-payment-intent.dto';
+import { ExecuteRefundHandler } from '../../src/refunds/execute-refund.handler';
 
 const prisma = new PrismaClient();
 
@@ -87,7 +95,7 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
     await prisma.$disconnect();
   });
 
-  it('runs the full farmer journey from company approval to delivered order', async () => {
+  it('runs the full farmer journey through delivery, return inspection and refund', async () => {
     if (!app) {
       throw new Error('Nest application did not boot');
     }
@@ -223,6 +231,8 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
         packSize: 1,
         packUnit: 'kg',
         mrpPaise: 125000,
+        hsnCode: '1008',
+        gstRateBps: 500,
         reason: 'Initial pack size',
       })
       .expect(201);
@@ -546,7 +556,8 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
     expect(invoice.sellerGstinSnapshot).toBe('08ABCDE1234F1Z5');
     expect(invoice.farmerNameSnapshot).toBe('Acceptance Farmer');
     expect(invoice.subtotalPaise).toBe(SELLING_PRICE_PAISE * ORDER_QUANTITY);
-    expect(invoice.totalPaise).toBe(invoice.subtotalPaise + invoice.taxPaise);
+    expect(invoice.taxableAmountPaise + invoice.taxPaise).toBe(invoice.subtotalPaise);
+    expect(invoice.totalPaise).toBe(invoice.subtotalPaise);
 
     // ---------------------------------------------------------------------
     // Steps 18-21: dispatch, delivery partner assignment, OTP completion.
@@ -569,6 +580,23 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
     expect(otpCode).toMatch(/^[0-9]{6}$/);
 
     await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(actors.deliveryPartnerHeaders)
+      .send({ reason: 'Delivery assignment accepted' })
+      .expect(201);
+
+    const labelResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/dispatch-label`)
+      .set(actors.distributorHeaders)
+      .send({ reason: 'Issue package pickup QR' })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(actors.deliveryPartnerHeaders)
+      .send({ packageQrCode: labelResponse.body.data.packageQrCode })
+      .expect(201);
+
+    await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
       .set(actors.deliveryPartnerHeaders)
       .send({ reason: 'Delivery partner collected the package' })
@@ -577,7 +605,11 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
     const deliveredResponse = await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(actors.deliveryPartnerHeaders)
-      .send({ otpCode, proofNote: 'Handed to farmer and OTP verified' })
+      .send({
+        otpCode,
+        proofNote: 'Handed to farmer and OTP verified',
+        proofLocationStatus: 'UNAVAILABLE',
+      })
       .expect(201);
     expect(deliveredResponse.body.data.status).toBe(ProductOrderStatus.DELIVERED);
 
@@ -654,6 +686,520 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
     expect(settlementResponse.body.data.status).toBe('ELIGIBLE');
 
     // ---------------------------------------------------------------------
+    // Post-purchase acceptance tail: the farmer returns the delivered child
+    // order, the distributor inspects against its original reservation, and
+    // finance completes an explicitly mock refund with ledger reversals.
+    // ---------------------------------------------------------------------
+    const eligibilityResponse = await request(server)
+      .get(`/api/v1/returns/eligibility/${orderId}`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(eligibilityResponse.body.data.eligible).toBe(true);
+    const eligibleItem = eligibilityResponse.body.data.items[0] as {
+      productOrderItemId: string;
+      orderedQuantity: number;
+    };
+    expect(eligibleItem.orderedQuantity).toBe(ORDER_QUANTITY);
+
+    const returnIdempotencyKey = `acceptance-return-${suffix}`;
+    const createReturnBody = {
+      productOrderId: orderId,
+      reasonCode: ReturnReasonCode.QUALITY_ISSUE,
+      reasonNote: 'Farmer reported a quality issue during the acceptance journey',
+      items: [
+        {
+          productOrderItemId: eligibleItem.productOrderItemId,
+          quantity: ORDER_QUANTITY,
+        },
+      ],
+    };
+    const returnResponse = await request(server)
+      .post('/api/v1/returns')
+      .set(actors.farmerHeaders)
+      .set('Idempotency-Key', returnIdempotencyKey)
+      .send(createReturnBody)
+      .expect(201);
+    const returnRequestId = returnResponse.body.data.id as string;
+    const returnItem = returnResponse.body.data.items[0] as {
+      id: string;
+      reservations: Array<{ id: string; batchId: string; quantity: number }>;
+    };
+    const originalReservation = returnItem.reservations[0];
+    if (!originalReservation) {
+      throw new Error('Return response omitted the original inventory reservation');
+    }
+    expect(originalReservation.batchId).toBe(batchId);
+    expect(originalReservation.quantity).toBe(ORDER_QUANTITY);
+    expect(returnResponse.body.data.refundableAmountPaise).toBe(
+      SELLING_PRICE_PAISE * ORDER_QUANTITY,
+    );
+
+    // The bytes have already passed through the independently tested upload and
+    // scan pipeline. Attaching them is a separate return-domain transaction.
+    const evidenceFile = await prisma.storedFile.create({
+      data: {
+        ownerUserId: actors.farmerUserId,
+        organisationId: actors.farmerHeaders['x-organisation-id']!,
+        purpose: StoredFilePurpose.RETURN_EVIDENCE,
+        status: StoredFileStatus.AVAILABLE,
+        objectKey: `return-evidence/acceptance-${suffix}.jpg`,
+        originalFilename: 'damaged-pack.jpg',
+        contentType: 'image/jpeg',
+        declaredSizeBytes: 128,
+        sizeBytes: 128,
+        checksumSha256: 'a'.repeat(64),
+        scanResult: StoredFileScanResult.CLEAN,
+        scanCompletedAt: new Date(),
+        uploadedAt: new Date(),
+        uploadUrlExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const attachEvidenceBody = {
+      storedFileId: evidenceFile.id,
+      caption: 'Seal was broken when the parcel arrived.',
+    };
+    const attachedEvidence = await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/evidence`)
+      .set(actors.farmerHeaders)
+      .send(attachEvidenceBody)
+      .expect(201);
+    expect(attachedEvidence.body.data).toEqual(
+      expect.objectContaining({
+        storedFileId: evidenceFile.id,
+        status: StoredFileStatus.AVAILABLE,
+      }),
+    );
+
+    // A network retry returns the same attachment and creates neither a second
+    // row nor a second audit event.
+    const replayEvidence = await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/evidence`)
+      .set(actors.farmerHeaders)
+      .send(attachEvidenceBody)
+      .expect(201);
+    expect(replayEvidence.body.data.id).toBe(attachedEvidence.body.data.id);
+    expect(
+      await prisma.returnRequestEvidence.count({
+        where: { storedFileId: evidenceFile.id },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          action: 'RETURN_EVIDENCE_ATTACHED',
+          resourceId: returnRequestId,
+        },
+      }),
+    ).toBe(1);
+
+    // Attachment moves the file into the return seller's organisation scope,
+    // while the farmer remains its owner. Both sides can use signed downloads.
+    const attachedStoredFile = await prisma.storedFile.findUniqueOrThrow({
+      where: { id: evidenceFile.id },
+    });
+    expect(attachedStoredFile.organisationId).toBe(actors.distributorOrganisationId);
+    await request(server)
+      .get(`/api/v1/files/${evidenceFile.id}/download-url`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    await request(server)
+      .get(`/api/v1/files/${evidenceFile.id}/download-url`)
+      .set(actors.distributorHeaders)
+      .expect(200);
+
+    const replayReturn = await request(server)
+      .post('/api/v1/returns')
+      .set(actors.farmerHeaders)
+      .set('Idempotency-Key', returnIdempotencyKey)
+      .send(createReturnBody)
+      .expect(201);
+    expect(replayReturn.body.data.id).toBe(returnRequestId);
+
+    await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/approve`)
+      .set(actors.distributorHeaders)
+      .send({ reason: 'Seller approved the farmer return' })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/pickup`)
+      .set(actors.operationsHeaders)
+      .send({ reason: 'Operations recorded the return pickup' })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/receive`)
+      .set(actors.distributorHeaders)
+      .send({ reason: 'Seller received the original package for inspection' })
+      .expect(201);
+
+    const inspectionResponse = await request(server)
+      .post(`/api/v1/returns/${returnRequestId}/inspect`)
+      .set(actors.distributorHeaders)
+      .send({
+        inspectionNote: 'Original batch and sealed packs verified as restockable',
+        dispositions: [
+          {
+            returnRequestItemId: returnItem.id,
+            reservationId: originalReservation.id,
+            outcome: ReturnInspectionOutcome.RESTOCKABLE,
+            quantity: ORDER_QUANTITY,
+          },
+        ],
+      })
+      .expect(201);
+    expect(inspectionResponse.body.data.status).toBe('INSPECTED');
+    expect(inspectionResponse.body.data.approvedRefundAmountPaise).toBe(
+      SELLING_PRICE_PAISE * ORDER_QUANTITY,
+    );
+    expect(inspectionResponse.body.data.inspectionDispositions[0]).toEqual(
+      expect.objectContaining({
+        batchId,
+        outcome: ReturnInspectionOutcome.RESTOCKABLE,
+        quantity: ORDER_QUANTITY,
+        quantityDelta: ORDER_QUANTITY,
+        balanceAfter: OPENING_STOCK,
+      }),
+    );
+
+    const restockMovements = await request(server)
+      .get('/api/v1/inventory/movements')
+      .query({
+        batchId,
+        movementType: InventoryMovementType.RETURN_RESTOCKED,
+        limit: 50,
+      })
+      .set(actors.distributorHeaders)
+      .expect(200);
+    expect(restockMovements.body.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          quantityDelta: ORDER_QUANTITY,
+          balanceAfter: OPENING_STOCK,
+          referenceType: 'ReturnInspectionDisposition',
+        }),
+      ]),
+    );
+
+    const refundResponse = await request(server)
+      .post('/api/v1/refunds')
+      .set(actors.financeManagerHeaders)
+      .set('Idempotency-Key', `acceptance-refund-${suffix}`)
+      .send({ returnRequestId })
+      .expect(201);
+    const refundId = refundResponse.body.data.id as string;
+    expect(refundResponse.body.data.amountPaise).toBe(SELLING_PRICE_PAISE * ORDER_QUANTITY);
+    expect(refundResponse.body.data.status).toBe('PENDING');
+
+    const replayRefund = await request(server)
+      .post('/api/v1/refunds')
+      .set(actors.financeManagerHeaders)
+      .set('Idempotency-Key', `acceptance-refund-${suffix}`)
+      .send({ returnRequestId })
+      .expect(201);
+    expect(replayRefund.body.data.id).toBe(refundId);
+
+    const refundConfirmationKey = `acceptance-refund-confirm-${suffix}`;
+    const confirmedRefund = await request(server)
+      .post(`/api/v1/refunds/${refundId}/confirm`)
+      .set(actors.financeManagerHeaders)
+      .set('Idempotency-Key', refundConfirmationKey)
+      .send({ outcome: 'SUCCEEDED' })
+      .expect(201);
+    expect(confirmedRefund.body.data.status).toBe('PROCESSING');
+    const processingEvent = confirmedRefund.body.data.events.find(
+      (event: { eventType: string }) => event.eventType === 'PROCESSING_STARTED',
+    ) as { id: string };
+    await app
+      .get(ExecuteRefundHandler)
+      .handle(createJobEnvelope({ refundEventId: processingEvent.id }, 'acceptance-refund-worker'));
+
+    const completedRefund = await request(server)
+      .get(`/api/v1/refunds/${refundId}`)
+      .set(actors.financeManagerHeaders)
+      .expect(200);
+    expect(completedRefund.body.data.status).toBe('SUCCEEDED');
+    // The reference now comes from the gateway rather than being minted inline,
+    // so the assertion is on the mock gateway's prefix rather than an exact
+    // string a real gateway would never produce.
+    expect(completedRefund.body.data.providerRefundReference).toMatch(/^MOCK-REFUND-/);
+
+    const replayConfirmation = await request(server)
+      .post(`/api/v1/refunds/${refundId}/confirm`)
+      .set(actors.financeManagerHeaders)
+      .set('Idempotency-Key', refundConfirmationKey)
+      .send({ outcome: 'SUCCEEDED' })
+      .expect(201);
+    expect(replayConfirmation.body.data.id).toBe(refundId);
+    expect(replayConfirmation.body.data.status).toBe('SUCCEEDED');
+
+    const farmerRefund = await request(server)
+      .get(`/api/v1/refunds/${refundId}`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(farmerRefund.body.data.farmerUserId).toBe(actors.farmerUserId);
+    expect(farmerRefund.body.data.status).toBe('SUCCEEDED');
+
+    const farmerRefunds = await request(server)
+      .get('/api/v1/refunds/me')
+      .query({ returnRequestId })
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(farmerRefunds.body.data.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: refundId, status: 'SUCCEEDED' })]),
+    );
+
+    await request(server)
+      .get(`/api/v1/refunds/${refundId}`)
+      .set(actors.distributorHeaders)
+      .expect(403);
+
+    const completedReturn = await request(server)
+      .get(`/api/v1/returns/${returnRequestId}`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(completedReturn.body.data.status).toBe('COMPLETED');
+    expect(completedReturn.body.data.refunds[0]).toEqual(
+      expect.objectContaining({ id: refundId, status: 'SUCCEEDED' }),
+    );
+
+    const refundedOrder = await request(server)
+      .get(`/api/v1/orders/${orderId}`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(refundedOrder.body.data.status).toBe(ProductOrderStatus.REFUNDED);
+
+    // ---------------------------------------------------------------------
+    // Post-refund grievance: the farmer raises an idempotent dispute, support
+    // investigates, finance records an immutable adjustment, and the original
+    // terminal order status is restored before the dispute closes.
+    // ---------------------------------------------------------------------
+    const disputeKey = `acceptance-dispute-${suffix}`;
+    const disputeBody = {
+      productOrderId: orderId,
+      returnRequestId,
+      category: 'REFUND_AMOUNT',
+      description: 'Farmer disputes the final amount after the inspected return.',
+    };
+    const disputeResponse = await request(server)
+      .post('/api/v1/disputes')
+      .set(actors.farmerHeaders)
+      .set('Idempotency-Key', disputeKey)
+      .send(disputeBody)
+      .expect(201);
+    const disputeId = disputeResponse.body.data.id as string;
+    expect(disputeResponse.body.data.status).toBe('OPEN');
+    expect(disputeResponse.body.data.orderStatusBeforeDispute).toBe(ProductOrderStatus.REFUNDED);
+
+    const replayDispute = await request(server)
+      .post('/api/v1/disputes')
+      .set(actors.farmerHeaders)
+      .set('Idempotency-Key', disputeKey)
+      .send(disputeBody)
+      .expect(201);
+    expect(replayDispute.body.data.id).toBe(disputeId);
+
+    await request(server)
+      .post('/api/v1/disputes')
+      .set(actors.distributorHeaders)
+      .set('Idempotency-Key', `acceptance-dispute-seller-${suffix}`)
+      .send(disputeBody)
+      .expect(409);
+
+    const farmerDisputes = await request(server)
+      .get('/api/v1/disputes/me')
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(farmerDisputes.body.data.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: disputeId })]),
+    );
+
+    const sellerDisputes = await request(server)
+      .get('/api/v1/disputes')
+      .set(actors.distributorHeaders)
+      .expect(200);
+    expect(sellerDisputes.body.data.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: disputeId })]),
+    );
+
+    await request(server)
+      .post(`/api/v1/disputes/${disputeId}/assign`)
+      .set(actors.operationsHeaders)
+      .send({ assignedToUserId: actors.operationsUserId, note: 'Operations accepted review' })
+      .expect(201);
+
+    await request(server)
+      .post(`/api/v1/disputes/${disputeId}/request-info`)
+      .set(actors.operationsHeaders)
+      .send({ target: 'DISTRIBUTOR', note: 'Please confirm the inspected refund calculation.' })
+      .expect(201);
+
+    const sellerNoteKey = `acceptance-dispute-note-${suffix}`;
+    const sellerNote = await request(server)
+      .post(`/api/v1/disputes/${disputeId}/notes`)
+      .set(actors.distributorHeaders)
+      .set('Idempotency-Key', sellerNoteKey)
+      .send({ note: 'Inspection calculation and batch evidence have been rechecked.' })
+      .expect(201);
+    const noteEventCount = sellerNote.body.data.events.length as number;
+    const replaySellerNote = await request(server)
+      .post(`/api/v1/disputes/${disputeId}/notes`)
+      .set(actors.distributorHeaders)
+      .set('Idempotency-Key', sellerNoteKey)
+      .send({ note: 'Inspection calculation and batch evidence have been rechecked.' })
+      .expect(201);
+    expect(replaySellerNote.body.data.events).toHaveLength(noteEventCount);
+
+    const disputeAwardPaise = 5_000;
+    const resolvedDispute = await request(server)
+      .post(`/api/v1/disputes/${disputeId}/resolve`)
+      .set(actors.financeManagerHeaders)
+      .send({
+        outcome: 'FARMER',
+        resolutionAmountPaise: disputeAwardPaise,
+        resolutionNote: 'Finance approved a goodwill adjustment after reviewing the calculation.',
+      })
+      .expect(201);
+    expect(resolvedDispute.body.data.status).toBe('RESOLVED_FOR_FARMER');
+    expect(resolvedDispute.body.data.resolutionAmountPaise).toBe(disputeAwardPaise);
+
+    const orderAfterDispute = await request(server)
+      .get(`/api/v1/orders/${orderId}`)
+      .set(actors.farmerHeaders)
+      .expect(200);
+    expect(orderAfterDispute.body.data.status).toBe(ProductOrderStatus.REFUNDED);
+
+    const adjustmentLedger = await request(server)
+      .get('/api/v1/finance/ledger')
+      .query({ productOrderId: orderId, entryType: 'ADJUSTMENT', limit: 50 })
+      .set(actors.financeManagerHeaders)
+      .expect(200);
+    expect(adjustmentLedger.body.data.items).toEqual([
+      expect.objectContaining({
+        disputeId,
+        amountPaise: -disputeAwardPaise,
+        organisationId: actors.distributorOrganisationId,
+      }),
+    ]);
+
+    const closedDispute = await request(server)
+      .post(`/api/v1/disputes/${disputeId}/close`)
+      .set(actors.financeManagerHeaders)
+      .send({ note: 'Adjustment recorded and both parties notified.' })
+      .expect(201);
+    expect(closedDispute.body.data.status).toBe('CLOSED');
+
+    const farmerNotifications = await request(server)
+      .get('/api/v1/notifications/me')
+      .query({ channel: 'IN_APP', limit: 100 })
+      .set(actors.farmerHeaders)
+      .expect(200);
+    const paymentNotifications = (
+      farmerNotifications.body.data.items as Array<{
+        category: string;
+        relatedResourceType: string | null;
+        relatedResourceId: string | null;
+        status: string;
+        payloadSnapshot: Record<string, unknown>;
+      }>
+    ).filter((notification) => notification.relatedResourceId === checkoutId);
+    expect(paymentNotifications).toEqual([
+      expect.objectContaining({
+        category: 'PAYMENT_SUCCEEDED',
+        relatedResourceType: 'ProductCheckout',
+        relatedResourceId: checkoutId,
+        status: 'SENT',
+        payloadSnapshot: expect.objectContaining({
+          amountPaise: SELLING_PRICE_PAISE * ORDER_QUANTITY,
+          paymentIntentId,
+          productCheckoutId: checkoutId,
+        }),
+      }),
+    ]);
+    const returnNotifications = (
+      farmerNotifications.body.data.items as Array<{
+        category: string;
+        relatedResourceType: string | null;
+        relatedResourceId: string | null;
+        status: string;
+      }>
+    ).filter((notification) => notification.relatedResourceId === returnRequestId);
+    expect(returnNotifications).toHaveLength(7);
+    expect(returnNotifications).toEqual(
+      expect.arrayContaining(
+        [
+          'RETURN_REQUESTED',
+          'RETURN_APPROVED',
+          'RETURN_IN_TRANSIT',
+          'RETURN_RECEIVED',
+          'RETURN_INSPECTED',
+          'REFUND_INITIATED',
+          'REFUND_SUCCEEDED',
+        ].map((category) =>
+          expect.objectContaining({
+            category,
+            status: 'SENT',
+            relatedResourceType: 'ReturnRequest',
+          }),
+        ),
+      ),
+    );
+    const orderNotifications = (
+      farmerNotifications.body.data.items as Array<{
+        category: string;
+        relatedResourceType: string | null;
+        relatedResourceId: string | null;
+        status: string;
+      }>
+    ).filter((notification) => notification.relatedResourceId === orderId);
+    expect(orderNotifications).toHaveLength(8);
+    expect(orderNotifications).toEqual(
+      expect.arrayContaining(
+        [
+          'ORDER_ACCEPTED',
+          'ORDER_PACKED',
+          'INVOICE_GENERATED',
+          'ORDER_READY_FOR_PICKUP',
+          'ORDER_OUT_FOR_DELIVERY',
+          'ORDER_DELIVERED',
+          'DISPUTE_RAISED',
+          'DISPUTE_RESOLVED',
+        ].map((category) =>
+          expect.objectContaining({
+            category,
+            status: 'SENT',
+            relatedResourceType: 'ProductOrder',
+          }),
+        ),
+      ),
+    );
+
+    const reversedCommissionResponse = await request(server)
+      .get('/api/v1/finance/commission-entries')
+      .query({ productOrderId: orderId })
+      .set(actors.financeManagerHeaders)
+      .expect(200);
+    expect(reversedCommissionResponse.body.data.items).toHaveLength(4);
+    expect(
+      (reversedCommissionResponse.body.data.items as Array<{ status: string }>).every(
+        (entry) => entry.status === 'REVERSED',
+      ),
+    ).toBe(true);
+
+    const refundLedgerResponse = await request(server)
+      .get('/api/v1/finance/ledger')
+      .query({ productOrderId: orderId, entryType: 'REFUND', limit: 50 })
+      .set(actors.financeManagerHeaders)
+      .expect(200);
+    expect(refundLedgerResponse.body.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refundId,
+          amountPaise: -(SELLING_PRICE_PAISE * ORDER_QUANTITY),
+          commissionEntryId: null,
+        }),
+      ]),
+    );
+
+    // ---------------------------------------------------------------------
     // Step 26: every important action is visible in the audit log.
     // ---------------------------------------------------------------------
     const auditResponse = await request(server)
@@ -683,6 +1229,22 @@ describe('MVP acceptance scenario (PRODUCT_REQUIREMENTS section 30)', () => {
       'COMMISSION_ENTRY_FINALIZED',
       'SETTLEMENT_CREATED',
       'PROMOTER_ATTRIBUTION_CREATED',
+      'RETURN_REQUEST_CREATED',
+      'RETURN_REQUEST_APPROVED',
+      'RETURN_PICKUP_RECORDED',
+      'RETURN_RECEIVED_BY_SELLER',
+      'RETURN_INVENTORY_DISPOSITION_RECORDED',
+      'RETURN_REQUEST_INSPECTED',
+      'REFUND_INITIATED',
+      'REFUND_SUCCEEDED',
+      'DISPUTE_CREATED',
+      'DISPUTE_ASSIGNED',
+      'DISPUTE_INFORMATION_REQUESTED',
+      'DISPUTE_NOTE_ADDED',
+      'DISPUTE_RESOLVED',
+      'DISPUTE_CLOSED',
+      'COMMISSION_ENTRY_REVERSED',
+      'NOTIFICATION_ENQUEUED',
     ]) {
       expect(auditActions).toContain(requiredAction);
     }
@@ -737,6 +1299,7 @@ async function seedActors(): Promise<{
   deliveryPartnerUserId: string;
   promoterUserId: string;
   farmerUserId: string;
+  operationsUserId: string;
 }> {
   const suffix = randomUUID();
   const short = suffix.slice(0, 8);
@@ -835,6 +1398,14 @@ async function seedActors(): Promise<{
     deliveryOrganisation.id,
     PlatformRole.DELIVERY_PARTNER,
   );
+  await prisma.deliveryPartnerProfile.create({
+    data: {
+      userId: deliveryPartnerUser.id,
+      organisationId: deliveryOrganisation.id,
+      availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+      availabilityChangedAt: new Date(),
+    },
+  });
 
   const farmerOrganisation = await prisma.organisation.create({
     data: {
@@ -901,6 +1472,7 @@ async function seedActors(): Promise<{
     deliveryPartnerUserId: deliveryPartnerUser.id,
     promoterUserId: promoterUser.id,
     farmerUserId: farmerUser.id,
+    operationsUserId: operationsUser.id,
   };
 }
 

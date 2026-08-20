@@ -18,7 +18,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const requestId = getRequestId(request);
 
     const statusCode =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : (this.clientErrorStatus(exception) ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
     const rawResponse = exception instanceof HttpException ? exception.getResponse() : undefined;
     const errorBody = this.normaliseErrorBody(rawResponse, statusCode);
@@ -33,6 +35,26 @@ export class ApiExceptionFilter implements ExceptionFilter {
         details: errorBody.details,
       },
     });
+  }
+
+  /**
+   * The status carried by Express-ecosystem errors that are not `HttpException`.
+   *
+   * `body-parser` rejects an oversized body and malformed JSON by throwing a
+   * plain `Error` with `status`/`statusCode` set (413 and 400 respectively).
+   * Without this, both fell through to 500 -- so a client mistake was reported
+   * as a server fault, told the caller nothing about what to fix, and counted
+   * against server error rates in monitoring.
+   *
+   * Deliberately limited to 4xx: a 5xx from an unrecognised source is a genuine
+   * server fault and must keep its generic message rather than leak internals.
+   */
+  private clientErrorStatus(exception: unknown): number | undefined {
+    if (typeof exception !== 'object' || exception === null) return undefined;
+    const candidate = exception as { status?: unknown; statusCode?: unknown };
+    const status = typeof candidate.status === 'number' ? candidate.status : candidate.statusCode;
+    if (typeof status !== 'number' || !Number.isInteger(status)) return undefined;
+    return status >= 400 && status <= 499 ? status : undefined;
   }
 
   private normaliseErrorBody(
@@ -82,6 +104,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
     if (statusCode === HttpStatus.CONFLICT) {
       return ApiErrorCode.CONFLICT;
+    }
+    if (statusCode === HttpStatus.PAYLOAD_TOO_LARGE) {
+      return ApiErrorCode.PAYLOAD_TOO_LARGE;
+    }
+    if (statusCode === HttpStatus.TOO_MANY_REQUESTS) {
+      return ApiErrorCode.RATE_LIMITED;
     }
     return ApiErrorCode.INTERNAL_ERROR;
   }

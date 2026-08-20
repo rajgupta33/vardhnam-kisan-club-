@@ -231,6 +231,8 @@ describe('Phase 2A catalogue approval workflow', () => {
         packSize: 1,
         packUnit: 'kg',
         mrpPaise: 125000,
+        hsnCode: '1008',
+        gstRateBps: 500,
         reason: 'Add first pack size',
       })
       .expect(201);

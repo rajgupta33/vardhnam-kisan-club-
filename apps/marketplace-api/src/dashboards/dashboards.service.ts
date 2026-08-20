@@ -302,7 +302,11 @@ export class DashboardsService {
             where: {
               deliveryPartnerUserId: actor.userId,
               status: {
-                in: [ProductDeliveryAssignmentStatus.ASSIGNED, ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY],
+                in: [
+                  ProductDeliveryAssignmentStatus.ASSIGNED,
+                  ProductDeliveryAssignmentStatus.ACCEPTED,
+                  ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+                ],
               },
             },
           }),

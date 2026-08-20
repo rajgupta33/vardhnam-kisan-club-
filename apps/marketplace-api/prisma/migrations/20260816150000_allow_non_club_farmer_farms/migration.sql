@@ -1,0 +1,2 @@
+ALTER TABLE "Farm"
+ALTER COLUMN "membershipId" DROP NOT NULL;

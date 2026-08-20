@@ -20,6 +20,10 @@ import { AuditService, type AuditRecordInput } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
+import {
+  FarmerSupportNotificationEvent,
+  NotificationEventsService,
+} from '../notifications/notification-events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AddSupportTicketEvidenceDto } from './dto/add-support-ticket-evidence.dto';
 import type { AssignSupportTicketDto } from './dto/assign-support-ticket.dto';
@@ -48,6 +52,7 @@ export class SupportService {
     private readonly auditService: AuditService,
     private readonly accessService: AccessService,
     private readonly configService: ConfigService,
+    private readonly notificationEventsService: NotificationEventsService,
   ) {}
 
   async createTicket(dto: CreateSupportTicketDto, actor: CurrentUser, requestId?: string) {
@@ -57,7 +62,9 @@ export class SupportService {
 
     const priority = dto.priority ?? SupportTicketPriority.MEDIUM;
     const baseHours = this.configService.getOrThrow<number>('SUPPORT_TICKET_DEFAULT_SLA_HOURS');
-    const slaDueAt = new Date(Date.now() + baseHours * SLA_PRIORITY_MULTIPLIER[priority] * 3_600_000);
+    const slaDueAt = new Date(
+      Date.now() + baseHours * SLA_PRIORITY_MULTIPLIER[priority] * 3_600_000,
+    );
 
     return this.prisma.$transaction(async (tx) => {
       const ticket = await tx.supportTicket.create({
@@ -86,6 +93,17 @@ export class SupportService {
         }),
         tx,
       );
+
+      if (ticket.raisedByRole === PlatformRole.FARMER) {
+        await this.notificationEventsService.emitSupportEvent(tx, {
+          event: FarmerSupportNotificationEvent.SUPPORT_TICKET_CREATED,
+          recipientUserId: ticket.raisedByUserId,
+          supportTicketId: ticket.id,
+          actorUserId: actor.userId,
+          actorRole: actor.role,
+          requestId,
+        });
+      }
 
       return ticket;
     });
@@ -134,10 +152,11 @@ export class SupportService {
     requestId?: string,
   ) {
     const ticket = await this.findTicketOrThrow(ticketId);
-    this.ensureValidTransition(
-      ticket,
-      [SupportTicketStatus.OPEN, SupportTicketStatus.ESCALATED, SupportTicketStatus.REOPENED],
-    );
+    this.ensureValidTransition(ticket, [
+      SupportTicketStatus.OPEN,
+      SupportTicketStatus.ESCALATED,
+      SupportTicketStatus.REOPENED,
+    ]);
 
     const assigneeMembership = await this.prisma.organisationMembership.findFirst({
       where: {
@@ -186,7 +205,12 @@ export class SupportService {
     );
   }
 
-  async resumeTicket(ticketId: string, dto: SupportTicketActionDto, actor: CurrentUser, requestId?: string) {
+  async resumeTicket(
+    ticketId: string,
+    dto: SupportTicketActionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
     const ticket = await this.findTicketOrThrow(ticketId);
     this.ensureValidTransition(ticket, WAITING_STATUSES);
 
@@ -246,7 +270,12 @@ export class SupportService {
     );
   }
 
-  async closeTicket(ticketId: string, dto: SupportTicketActionDto, actor: CurrentUser, requestId?: string) {
+  async closeTicket(
+    ticketId: string,
+    dto: SupportTicketActionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
     const ticket = await this.findTicketOrThrow(ticketId);
     this.ensureValidTransition(ticket, [SupportTicketStatus.RESOLVED]);
 
@@ -260,7 +289,12 @@ export class SupportService {
     );
   }
 
-  async reopenTicket(ticketId: string, dto: SupportTicketActionDto, actor: CurrentUser, requestId?: string) {
+  async reopenTicket(
+    ticketId: string,
+    dto: SupportTicketActionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
     const ticket = await this.findTicketOrThrow(ticketId);
     this.ensureValidTransition(ticket, [SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED]);
 
@@ -274,6 +308,32 @@ export class SupportService {
       actor,
       'SUPPORT_TICKET_REOPENED',
       dto.reason ?? 'Ticket reopened',
+      requestId,
+    );
+  }
+
+  async reopenOwnTicket(
+    ticketId: string,
+    dto: SupportTicketActionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const ticket = await this.findTicketOrThrow(ticketId);
+    if (ticket.raisedByUserId !== actor.userId) {
+      throw this.forbidden('Farmers may only reopen their own support tickets');
+    }
+    this.ensureValidTransition(ticket, [SupportTicketStatus.RESOLVED, SupportTicketStatus.CLOSED]);
+
+    return this.transitionTicket(
+      ticket,
+      {
+        status: SupportTicketStatus.REOPENED,
+        resolvedAt: null,
+        closedAt: null,
+      },
+      actor,
+      'SUPPORT_TICKET_REOPENED_BY_RAISER',
+      dto.reason ?? 'Ticket reopened by its raiser',
       requestId,
     );
   }
@@ -415,8 +475,49 @@ export class SupportService {
         tx,
       );
 
+      if (ticket.raisedByRole === PlatformRole.FARMER) {
+        await this.notificationEventsService.emitSupportEvent(tx, {
+          event: this.supportNotificationEvent(action, updated.status),
+          recipientUserId: ticket.raisedByUserId,
+          supportTicketId: ticket.id,
+          actorUserId: actor.userId,
+          actorRole: actor.role,
+          requestId,
+        });
+      }
+
       return updated;
     });
+  }
+
+  private supportNotificationEvent(
+    action: string,
+    status: SupportTicketStatus,
+  ): FarmerSupportNotificationEvent {
+    if (action === 'SUPPORT_TICKET_ASSIGNED') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_ASSIGNED;
+    }
+    if (action === 'SUPPORT_TICKET_MARKED_WAITING') {
+      return status === SupportTicketStatus.WAITING_FOR_CUSTOMER
+        ? FarmerSupportNotificationEvent.SUPPORT_TICKET_WAITING_FOR_CUSTOMER
+        : FarmerSupportNotificationEvent.SUPPORT_TICKET_WAITING_FOR_SELLER;
+    }
+    if (action === 'SUPPORT_TICKET_RESUMED') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_RESUMED;
+    }
+    if (action === 'SUPPORT_TICKET_ESCALATED') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_ESCALATED;
+    }
+    if (action === 'SUPPORT_TICKET_RESOLVED') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_RESOLVED;
+    }
+    if (action === 'SUPPORT_TICKET_CLOSED') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_CLOSED;
+    }
+    if (action === 'SUPPORT_TICKET_REOPENED' || action === 'SUPPORT_TICKET_REOPENED_BY_RAISER') {
+      return FarmerSupportNotificationEvent.SUPPORT_TICKET_REOPENED;
+    }
+    throw new Error(`No farmer notification event is defined for support action ${action}`);
   }
 
   private ticketAuditValue(ticket: SupportTicket): Prisma.InputJsonObject {

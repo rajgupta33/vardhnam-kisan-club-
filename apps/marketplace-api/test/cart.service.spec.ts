@@ -97,6 +97,12 @@ describe('CartService', () => {
     expect(result.itemCount).toBe(1);
     expect(result.subtotalPaise).toBe(240000);
     expect(result.serviceablePincode).toBe('302001');
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        minimumOrderQuantity: 1,
+        maximumOrderQuantity: 20,
+      }),
+    );
     expect(tx.cartItem.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({
@@ -326,6 +332,10 @@ function cartItemFixture(input: { quantity: number; availableQuantitySnapshot: n
     warehouseNameSnapshot: 'Jaipur Main Warehouse',
     fulfilmentModeSnapshot: FulfilmentMode.DISTRIBUTOR_FULFILLED,
     deliverySlaDaysSnapshot: 3,
+    offer: {
+      minimumOrderQuantity: 1,
+      maximumOrderQuantity: 20,
+    },
     createdAt: new Date('2026-08-03T00:00:00.000Z'),
     updatedAt: new Date('2026-08-03T00:00:00.000Z'),
   };

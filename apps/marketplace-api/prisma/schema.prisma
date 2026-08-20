@@ -21,14 +21,160 @@ enum PlatformRole {
   OPERATIONS_MANAGER
   FINANCE_MANAGER
   CATALOGUE_REVIEWER
+  AGRONOMIST
   ADMIN
   SUPER_ADMIN
+}
+
+enum AdvisoryCategory {
+  CROP_STAGE
+  IRRIGATION
+  NUTRITION
+  PEST_MONITORING
+  DISEASE_RISK
+  HARVEST
+  GENERAL_PRACTICE
+}
+
+enum AdvisoryRuleStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum AdvisoryEventStatus {
+  PENDING
+  DELIVERED
+  READ
+  DISMISSED
 }
 
 enum UserStatus {
   ACTIVE
   SUSPENDED
   DEACTIVATED
+}
+
+enum KisanClubMembershipStatus {
+  PENDING_PROFILE
+  AWAITING_PROMOTER
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+  CLOSED
+}
+
+enum FarmOwnershipType {
+  OWNED
+  LEASED
+  SHARECROPPED
+  OTHER
+}
+
+enum IrrigationSource {
+  TUBE_WELL
+  CANAL
+  RAIN_FED
+  POND
+  DRIP
+  SPRINKLER
+  OTHER
+}
+
+enum CropCycleStatus {
+  PLANNED
+  ACTIVE
+  HARVESTED
+  ABANDONED
+}
+
+enum FarmActivityType {
+  SOWING
+  IRRIGATION
+  FERTILIZER_APPLIED
+  CROP_PROTECTION_APPLIED
+  PEST_OBSERVED
+  DISEASE_OBSERVED
+  WEEDING
+  CROP_DAMAGE
+  HARVEST
+  OTHER
+}
+
+enum FarmActivitySource {
+  FARMER
+  PROMOTER
+  SYSTEM
+}
+
+enum PromoterTerritoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum KisanClubAssignmentStatus {
+  ACTIVE
+  ENDED
+}
+
+enum KisanClubAssignmentReason {
+  AUTO_MATCHED
+  MANUAL_OPS
+  PROMOTER_EXITED
+  TERRITORY_CHANGED
+  FARMER_REQUEST
+  SERVICE_QUALITY
+  CAPACITY
+  INACTIVITY
+}
+
+enum KisanClubProgrammeStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum KisanClubBenefitType {
+  FLAT_AMOUNT_OFF
+  PERCENT_OFF
+  QUANTITY_THRESHOLD
+}
+
+enum KisanClubBenefitStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+}
+
+enum KisanClubBenefitTokenStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+enum KisanClubFulfilmentStatus {
+  ASSIGNED
+  PROMOTER_ACCEPTED
+  PROMOTER_DECLINED
+  PRODUCT_READY
+  FARMER_CONTACTED
+  READY_FOR_PICKUP
+  OUT_FOR_DELIVERY
+  COMPLETED
+  FAILED
+  REASSIGNED
+  CANCELLED
+}
+
+enum KisanClubFulfilmentMode {
+  CLUB_HOME_DELIVERY
+  PROMOTER_PICKUP
+  ASSISTED_PURCHASE
 }
 
 enum OrganisationType {
@@ -114,6 +260,8 @@ enum InventoryMovementType {
   DAMAGE_WRITE_OFF
   RESERVED_FOR_ORDER
   RELEASED_FROM_ORDER
+  RETURN_QUARANTINED
+  RETURN_RESTOCKED
 }
 
 enum DistributorOfferStatus {
@@ -177,8 +325,89 @@ enum ProductOrderStatus {
   CLOSED
 }
 
+enum ReturnRequestStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  IN_TRANSIT
+  RECEIVED
+  INSPECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  AWAITING_FARMER
+  AWAITING_DISTRIBUTOR
+  RESOLVED_FOR_FARMER
+  RESOLVED_FOR_DISTRIBUTOR
+  RESOLVED_SPLIT
+  CLOSED
+}
+
+enum DisputeCategory {
+  PRODUCT_QUALITY
+  DELIVERY
+  RETURN_DECISION
+  REFUND_AMOUNT
+  PAYMENT
+  OTHER
+}
+
+enum DisputeResolutionOutcome {
+  FARMER
+  DISTRIBUTOR
+  SPLIT
+}
+
+enum DisputeEventType {
+  CREATED
+  ASSIGNED
+  NOTE_ADDED
+  INFO_REQUESTED_FROM_FARMER
+  INFO_REQUESTED_FROM_DISTRIBUTOR
+  RESOLVED
+  CLOSED
+}
+
+enum ReturnPickupAssignmentStatus {
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  COLLECTED
+  CANCELLED
+}
+
+enum ReturnReasonCode {
+  DAMAGED_IN_TRANSIT
+  WRONG_ITEM
+  EXPIRED_OR_NEAR_EXPIRY
+  QUALITY_ISSUE
+  NOT_AS_DESCRIBED
+  ORDERED_BY_MISTAKE
+  OTHER
+}
+
+enum ReturnInspectionOutcome {
+  RESTOCKABLE
+  DAMAGED_WRITE_OFF
+  QUARANTINED
+  REJECTED_RETURN
+}
+
+/// Which side of the payment provider the platform is talking to.
+///
+/// `MOCK` is the in-process provider used by development and CI: it never
+/// touches the network, but it signs and verifies webhooks with the same
+/// HMAC-SHA256 scheme the Indian gateways use, so the verification, dedupe and
+/// async-processing paths are genuinely exercised. `SANDBOX` and `LIVE` are the
+/// two faces of a real merchant account and are selected by `PAYMENT_PROVIDER`.
 enum PaymentProviderMode {
   MOCK
+  SANDBOX
+  LIVE
 }
 
 enum PaymentIntentStatus {
@@ -193,6 +422,50 @@ enum PaymentEventType {
   CONFIRMATION_STARTED
   PAYMENT_SUCCEEDED
   PAYMENT_FAILED
+  /// A signature-verified webhook was accepted for this intent. Recorded on
+  /// receipt, before processing, so a webhook that later fails to apply is
+  /// still visible on the intent's timeline.
+  WEBHOOK_RECEIVED
+  /// The provider's own view of the intent was fetched directly, either by
+  /// reconciliation or by an operator.
+  STATUS_FETCHED
+  /// Reconciliation found the provider and the platform disagreeing about this
+  /// intent. Never resolved silently -- it is a finance decision.
+  RECONCILIATION_MISMATCH
+}
+
+/// How far a received webhook has got through processing.
+///
+/// `RECEIVED` is written inside the request, before the 200; everything after
+/// happens on the `payment-webhooks` queue. `IGNORED` is a success, not a
+/// failure: it is what a redelivery of an already-applied event becomes.
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum RefundMethod {
+  ORIGINAL_PAYMENT_METHOD
+  MANUAL_BANK_TRANSFER
+  ADJUSTMENT
+}
+
+enum RefundEventType {
+  REFUND_CREATED
+  PROCESSING_STARTED
+  REFUND_SUCCEEDED
+  REFUND_FAILED
 }
 
 enum ProductInvoiceStatus {
@@ -207,59 +480,148 @@ enum ProductDispatchStatus {
 
 enum ProductDeliveryAssignmentStatus {
   ASSIGNED
+  ACCEPTED
+  REJECTED
   OUT_FOR_DELIVERY
   DELIVERED
   DELIVERY_FAILED
   CANCELLED
 }
 
+enum DeliveryProofLocationStatus {
+  GRANTED
+  DENIED
+  UNAVAILABLE
+}
+
+enum DeliveryFailureReasonCode {
+  FARMER_UNAVAILABLE
+  FARMER_REFUSED
+  ADDRESS_NOT_FOUND
+  ACCESS_RESTRICTED
+  VEHICLE_BREAKDOWN
+  WEATHER_OR_ROUTE_BLOCKED
+  PACKAGE_DAMAGED
+  OTHER
+}
+
+enum DeliveryPartnerAvailabilityStatus {
+  OFFLINE
+  ONLINE
+}
+
+enum FarmerLeadStatus {
+  NEW
+  CONTACTED
+  CONVERTED
+  LOST
+}
+
+enum FarmerLeadSource {
+  FIELD_VISIT
+  REFERRAL
+  CAMPAIGN
+  INBOUND
+  OTHER
+}
+
+enum PromoterVisitPurpose {
+  LEAD_FOLLOW_UP
+  FARMER_SUPPORT
+  ORDER_ASSISTANCE
+  FARM_SURVEY
+  COMPLAINT_FOLLOW_UP
+  OTHER
+}
+
+enum PromoterVisitLocationStatus {
+  NOT_REQUESTED
+  GRANTED
+  DENIED
+  UNAVAILABLE
+}
+
 model User {
-  id                             String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email                          String?                     @unique
-  phone                          String?                     @unique
+  id                             String                             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                          String?                            @unique
+  phone                          String?                            @unique
   passwordHash                   String?
-  status                         UserStatus                  @default(ACTIVE)
+  status                         UserStatus                         @default(ACTIVE)
   profile                        UserProfile?
   farmerProfile                  FarmerProfile?
   memberships                    OrganisationMembership[]
-  auditLogs                      AuditLog[]                  @relation("ActorAuditLogs")
-  reviewedOrganisations          Organisation[]              @relation("OrganisationReviewedBy")
-  reviewedBrands                 Brand[]                     @relation("BrandReviewedBy")
-  reviewedProducts               MasterProduct[]             @relation("ProductReviewedBy")
-  reviewedOffers                 DistributorOffer[]          @relation("OfferReviewedBy")
-  inventoryMovements             InventoryMovement[]         @relation("InventoryMovementCreatedBy")
-  productOrderHistory            ProductOrderStatusHistory[] @relation("ProductOrderStatusChangedBy")
-  paymentEvents                  PaymentEvent[]              @relation("PaymentEventActor")
-  generatedProductInvoices       ProductInvoice[]            @relation("ProductInvoiceGeneratedBy")
-  readyProductDispatches         ProductDispatch[]           @relation("ProductDispatchReadyBy")
-  deliveryAssignments            ProductDeliveryAssignment[] @relation("ProductDeliveryPartner")
-  assignedProductDeliveries      ProductDeliveryAssignment[] @relation("ProductDeliveryAssignedBy")
-  startedProductDeliveries       ProductDeliveryAssignment[] @relation("ProductDeliveryStartedBy")
-  completedProductDeliveries     ProductDeliveryAssignment[] @relation("ProductDeliveryCompletedBy")
+  auditLogs                      AuditLog[]                         @relation("ActorAuditLogs")
+  reviewedOrganisations          Organisation[]                     @relation("OrganisationReviewedBy")
+  reviewedBrands                 Brand[]                            @relation("BrandReviewedBy")
+  reviewedProducts               MasterProduct[]                    @relation("ProductReviewedBy")
+  reviewedOffers                 DistributorOffer[]                 @relation("OfferReviewedBy")
+  inventoryMovements             InventoryMovement[]                @relation("InventoryMovementCreatedBy")
+  productOrderHistory            ProductOrderStatusHistory[]        @relation("ProductOrderStatusChangedBy")
+  paymentEvents                  PaymentEvent[]                     @relation("PaymentEventActor")
+  generatedProductInvoices       ProductInvoice[]                   @relation("ProductInvoiceGeneratedBy")
+  readyProductDispatches         ProductDispatch[]                  @relation("ProductDispatchReadyBy")
+  issuedProductDispatchLabels    ProductDispatch[]                  @relation("ProductDispatchQrIssuedBy")
+  deliveryAssignments            ProductDeliveryAssignment[]        @relation("ProductDeliveryPartner")
+  deliveryPartnerProfiles        DeliveryPartnerProfile[]           @relation("DeliveryPartnerProfileUser")
+  farmerLeads                    FarmerLead[]                       @relation("FarmerLeadPromoter")
+  promoterVisits                 PromoterVisit[]                    @relation("PromoterVisitPromoter")
+  assignedProductDeliveries      ProductDeliveryAssignment[]        @relation("ProductDeliveryAssignedBy")
+  startedProductDeliveries       ProductDeliveryAssignment[]        @relation("ProductDeliveryStartedBy")
+  pickupVerifiedDeliveries       ProductDeliveryAssignment[]        @relation("ProductDeliveryPickupVerifiedBy")
+  completedProductDeliveries     ProductDeliveryAssignment[]        @relation("ProductDeliveryCompletedBy")
+  failedProductDeliveries        ProductDeliveryAssignment[]        @relation("ProductDeliveryFailedBy")
   refreshTokens                  RefreshToken[]
-  createdCommissionRules         CommissionRule[]            @relation("CommissionRuleCreatedBy")
-  createdSettlements             Settlement[]                @relation("SettlementCreatedBy")
-  promoterAttributionsAsPromoter PromoterAttribution[]       @relation("PromoterAttributionPromoter")
-  createdPromoterAttributions    PromoterAttribution[]       @relation("PromoterAttributionCreatedBy")
-  commissionEntriesAsRecipient   CommissionEntry[]           @relation("CommissionEntryRecipient")
+  createdCommissionRules         CommissionRule[]                   @relation("CommissionRuleCreatedBy")
+  createdSettlements             Settlement[]                       @relation("SettlementCreatedBy")
+  promoterAttributionsAsPromoter PromoterAttribution[]              @relation("PromoterAttributionPromoter")
+  createdPromoterAttributions    PromoterAttribution[]              @relation("PromoterAttributionCreatedBy")
+  commissionEntriesAsRecipient   CommissionEntry[]                  @relation("CommissionEntryRecipient")
   payoutAccount                  PayoutAccount?
-  verifiedPayoutAccounts         PayoutAccount[]             @relation("PayoutAccountVerifiedBy")
-  raisedSupportTickets           SupportTicket[]             @relation("SupportTicketRaisedBy")
-  assignedSupportTickets         SupportTicket[]             @relation("SupportTicketAssignedTo")
-  uploadedSupportTicketEvidence  SupportTicketEvidence[]     @relation("SupportTicketEvidenceUploadedBy")
-  enqueuedTallySyncRecords       TallySyncRecord[]           @relation("TallySyncRecordEnqueuedBy")
-  performedTallySyncAttempts     TallySyncAttempt[]          @relation("TallySyncAttemptPerformedBy")
-  receivedNotifications          Notification[]              @relation("NotificationRecipient")
-  triggeredNotifications         Notification[]              @relation("NotificationTriggeredBy")
-  performedNotificationAttempts  NotificationAttempt[]        @relation("NotificationAttemptPerformedBy")
-  createdAt                      DateTime                    @default(now()) @db.Timestamptz(6)
-  updatedAt                      DateTime                    @updatedAt @db.Timestamptz(6)
+  verifiedPayoutAccounts         PayoutAccount[]                    @relation("PayoutAccountVerifiedBy")
+  raisedSupportTickets           SupportTicket[]                    @relation("SupportTicketRaisedBy")
+  assignedSupportTickets         SupportTicket[]                    @relation("SupportTicketAssignedTo")
+  uploadedSupportTicketEvidence  SupportTicketEvidence[]            @relation("SupportTicketEvidenceUploadedBy")
+  enqueuedTallySyncRecords       TallySyncRecord[]                  @relation("TallySyncRecordEnqueuedBy")
+  performedTallySyncAttempts     TallySyncAttempt[]                 @relation("TallySyncAttemptPerformedBy")
+  receivedNotifications          Notification[]                     @relation("NotificationRecipient")
+  triggeredNotifications         Notification[]                     @relation("NotificationTriggeredBy")
+  performedNotificationAttempts  NotificationAttempt[]              @relation("NotificationAttemptPerformedBy")
+  returnRequests                 ReturnRequest[]                    @relation("ReturnRequestFarmerUser")
+  returnRequestHistory           ReturnRequestStatusHistory[]       @relation("ReturnRequestStatusChangedBy")
+  inspectedReturnRequests        ReturnRequest[]                    @relation("ReturnRequestInspectedBy")
+  returnInspectionDispositions   ReturnInspectionDisposition[]      @relation("ReturnInspectionDispositionInspectedBy")
+  uploadedReturnEvidence         ReturnRequestEvidence[]            @relation("ReturnRequestEvidenceUploadedBy")
+  disputesAsFarmer               Dispute[]                          @relation("DisputeFarmerUser")
+  raisedDisputes                 Dispute[]                          @relation("DisputeRaisedBy")
+  assignedDisputes               Dispute[]                          @relation("DisputeAssignedTo")
+  disputeEvents                  DisputeEvent[]                     @relation("DisputeEventActor")
+  returnPickupAssignments        ReturnPickupAssignment[]           @relation("ReturnPickupPartner")
+  returnPickupsAsFarmer          ReturnPickupAssignment[]           @relation("ReturnPickupFarmer")
+  assignedReturnPickups          ReturnPickupAssignment[]           @relation("ReturnPickupAssignedBy")
+  respondedReturnPickups         ReturnPickupAssignment[]           @relation("ReturnPickupRespondedBy")
+  collectedReturnPickups         ReturnPickupAssignment[]           @relation("ReturnPickupCollectedBy")
+  refundsAsFarmer                Refund[]                           @relation("RefundFarmerUser")
+  initiatedRefunds               Refund[]                           @relation("RefundInitiatedBy")
+  refundEvents                   RefundEvent[]                      @relation("RefundEventActor")
+  recordedFarmActivities         FarmActivity[]                     @relation("FarmActivityRecordedBy")
+  kisanClubPromoterProfile       KisanClubPromoterProfile?          @relation("ClubPromoterProfile")
+  kisanClubAssignments           KisanClubPromoterAssignment[]      @relation("ClubAssignmentPromoter")
+  assignedKisanClubAssignments   KisanClubPromoterAssignment[]      @relation("ClubAssignmentAssignedBy")
+  createdKisanClubProgrammes     KisanClubProductProgramme[]        @relation("ClubProgrammeCreatedBy")
+  createdKisanClubBenefitRules   KisanClubBenefitRule[]             @relation("ClubBenefitRuleCreatedBy")
+  kisanClubFulfilmentAssignments KisanClubFulfilmentAssignment[]    @relation("ClubFulfilmentPromoter")
+  kisanClubFulfilmentHistory     KisanClubFulfilmentStatusHistory[] @relation("ClubFulfilmentStatusChangedBy")
+  storedFiles                    StoredFile[]                       @relation("StoredFileOwner")
+  notificationPreferences        NotificationPreference[]           @relation("NotificationPreferenceUser")
+  createdAt                      DateTime                           @default(now()) @db.Timestamptz(6)
+  updatedAt                      DateTime                           @updatedAt @db.Timestamptz(6)
 
   @@index([status])
 }
 
 enum OtpPurpose {
   LOGIN
+  FARMER_REGISTRATION
 }
 
 model OtpChallenge {
@@ -325,11 +687,400 @@ model FarmerProfile {
   productDeliveryAssignments ProductDeliveryAssignment[]
   paymentIntents             PaymentIntent[]
   promoterAttributions       PromoterAttribution[]
+  convertedFarmerLeads       FarmerLead[]                @relation("FarmerLeadConvertedProfile")
+  promoterVisits             PromoterVisit[]             @relation("PromoterVisitFarmer")
+  returnRequests             ReturnRequest[]
+  kisanClubMembership        KisanClubMembership?
+  farms                      Farm[]
   createdAt                  DateTime                    @default(now()) @db.Timestamptz(6)
   updatedAt                  DateTime                    @updatedAt @db.Timestamptz(6)
 
   @@index([state, district])
   @@index([primaryPincode])
+}
+
+model KisanClubMembership {
+  id                       String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  farmerProfileId          String                          @unique @db.Uuid
+  farmerProfile            FarmerProfile                   @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  memberNumber             String                          @unique
+  status                   KisanClubMembershipStatus       @default(PENDING_PROFILE)
+  homePincode              String
+  homeVillage              String?
+  homeDistrict             String?
+  homeState                String?
+  joinedAt                 DateTime                        @db.Timestamptz(6)
+  termsVersion             String
+  termsAcceptedAt          DateTime                        @db.Timestamptz(6)
+  advisoryConsent          Boolean                         @default(false)
+  advisoryConsentAt        DateTime?                       @db.Timestamptz(6)
+  marketingConsent         Boolean                         @default(false)
+  marketingConsentAt       DateTime?                       @db.Timestamptz(6)
+  preciseLocationConsent   Boolean                         @default(false)
+  preciseLocationConsentAt DateTime?                       @db.Timestamptz(6)
+  referredByMembershipId   String?                         @db.Uuid
+  referredByMembership     KisanClubMembership?            @relation("ClubReferral", fields: [referredByMembershipId], references: [id], onDelete: SetNull)
+  referrals                KisanClubMembership[]           @relation("ClubReferral")
+  suspendedReason          String?
+  closedAt                 DateTime?                       @db.Timestamptz(6)
+  createdAt                DateTime                        @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime                        @updatedAt @db.Timestamptz(6)
+  farms                    Farm[]
+  promoterAssignments      KisanClubPromoterAssignment[]
+  benefitRedemptions       KisanClubBenefitRedemption[]
+  benefitTokens            KisanClubBenefitToken[]
+  fulfilmentAssignments    KisanClubFulfilmentAssignment[]
+  advisoryEvents           AdvisoryEvent[]
+
+  @@index([status, homePincode])
+  @@index([homeDistrict, status])
+}
+
+model PromoterTerritory {
+  id               String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  state            String
+  district         String
+  blocks           String[]                      @default([])
+  pincodes         String[]                      @default([])
+  villages         String[]                      @default([])
+  status           PromoterTerritoryStatus       @default(ACTIVE)
+  promoterProfiles KisanClubPromoterProfile[]
+  assignments      KisanClubPromoterAssignment[]
+  createdAt        DateTime                      @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime                      @updatedAt @db.Timestamptz(6)
+
+  @@index([state, district, status])
+}
+
+model KisanClubPromoterProfile {
+  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  promoterUserId         String             @unique @db.Uuid
+  promoterUser           User               @relation("ClubPromoterProfile", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  promoterOrganisationId String             @db.Uuid
+  promoterOrganisation   Organisation       @relation("ClubPromoterOrganisation", fields: [promoterOrganisationId], references: [id], onDelete: Restrict)
+  territoryId            String?            @db.Uuid
+  territory              PromoterTerritory? @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  homeVillage            String?
+  homePincode            String?
+  clubEnabled            Boolean            @default(false)
+  acceptingNewFarmers    Boolean            @default(true)
+  maxActiveFarmers       Int                @default(150)
+  activeFarmerCount      Int                @default(0)
+  createdAt              DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(6)
+
+  @@index([territoryId, clubEnabled, acceptingNewFarmers])
+  @@index([homePincode, clubEnabled])
+}
+
+model KisanClubPromoterAssignment {
+  id                    String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  membershipId          String                    @db.Uuid
+  membership            KisanClubMembership       @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  promoterUserId        String                    @db.Uuid
+  promoterUser          User                      @relation("ClubAssignmentPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  territoryId           String?                   @db.Uuid
+  territory             PromoterTerritory?        @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  status                KisanClubAssignmentStatus @default(ACTIVE)
+  assignedAt            DateTime                  @default(now()) @db.Timestamptz(6)
+  endedAt               DateTime?                 @db.Timestamptz(6)
+  assignmentReason      KisanClubAssignmentReason
+  matchScore            Json?
+  assignedByUserId      String?                   @db.Uuid
+  assignedBy            User?                     @relation("ClubAssignmentAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  assignedByRole        PlatformRole?
+  reason                String?
+  promoterAttributionId String?                   @unique @db.Uuid
+  promoterAttribution   PromoterAttribution?      @relation(fields: [promoterAttributionId], references: [id], onDelete: SetNull)
+  createdAt             DateTime                  @default(now()) @db.Timestamptz(6)
+
+  @@index([membershipId, status])
+  @@index([promoterUserId, status])
+}
+
+model KisanClubProductProgramme {
+  id                String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId         String                   @db.Uuid
+  product           MasterProduct            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId         String?                  @db.Uuid
+  variant           ProductVariant?          @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  status            KisanClubProgrammeStatus @default(DRAFT)
+  startsAt          DateTime                 @db.Timestamptz(6)
+  endsAt            DateTime?                @db.Timestamptz(6)
+  eligiblePincodes  String[]                 @default([])
+  eligibleDistricts String[]                 @default([])
+  displayPriority   Int                      @default(0)
+  createdByUserId   String?                  @db.Uuid
+  createdBy         User?                    @relation("ClubProgrammeCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByRole     PlatformRole?
+  reason            String?
+  createdAt         DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                 @updatedAt @db.Timestamptz(6)
+  benefitRules      KisanClubBenefitRule[]
+
+  @@unique([productId, variantId])
+  @@index([status, startsAt, endsAt])
+  @@index([productId, status])
+}
+
+model KisanClubBenefitRule {
+  id                  String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  programmeId         String                       @db.Uuid
+  programme           KisanClubProductProgramme    @relation(fields: [programmeId], references: [id], onDelete: Restrict)
+  benefitType         KisanClubBenefitType
+  flatAmountPaise     Int?
+  percentBps          Int?
+  maxBenefitPaise     Int?
+  minimumQuantity     Int                          @default(1)
+  eligiblePincodes    String[]                     @default([])
+  eligibleCropIds     String[]                     @default([]) @db.Uuid
+  status              KisanClubBenefitStatus       @default(DRAFT)
+  startsAt            DateTime                     @db.Timestamptz(6)
+  endsAt              DateTime?                    @db.Timestamptz(6)
+  totalUsageLimit     Int?
+  perMemberUsageLimit Int?
+  usageCount          Int                          @default(0)
+  createdByUserId     String?                      @db.Uuid
+  createdBy           User?                        @relation("ClubBenefitRuleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByRole       PlatformRole?
+  reason              String?
+  redemptions         KisanClubBenefitRedemption[]
+  benefitTokens       KisanClubBenefitToken[]
+  orderItems          ProductOrderItem[]
+  createdAt           DateTime                     @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                     @updatedAt @db.Timestamptz(6)
+
+  @@index([programmeId, status, startsAt, endsAt])
+  @@index([status, startsAt, endsAt])
+}
+
+model KisanClubBenefitRedemption {
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ruleId              String                 @db.Uuid
+  rule                KisanClubBenefitRule   @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  membershipId        String                 @db.Uuid
+  membership          KisanClubMembership    @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  productOrderId      String                 @db.Uuid
+  productOrder        ProductOrder           @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  productOrderItemId  String                 @unique @db.Uuid
+  productOrderItem    ProductOrderItem       @relation(fields: [productOrderItemId], references: [id], onDelete: Restrict)
+  quantity            Int
+  perUnitBenefitPaise Int
+  totalBenefitPaise   Int
+  benefitTokenId      String?                @unique @db.Uuid
+  benefitToken        KisanClubBenefitToken? @relation(fields: [benefitTokenId], references: [id], onDelete: Restrict)
+  createdAt           DateTime               @default(now()) @db.Timestamptz(6)
+
+  @@index([ruleId, createdAt])
+  @@index([membershipId, ruleId])
+  @@index([productOrderId])
+}
+
+model KisanClubBenefitToken {
+  id                   String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenReference       String                      @unique
+  membershipId         String                      @db.Uuid
+  membership           KisanClubMembership         @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  benefitRuleId        String                      @db.Uuid
+  benefitRule          KisanClubBenefitRule        @relation(fields: [benefitRuleId], references: [id], onDelete: Restrict)
+  offerId              String                      @db.Uuid
+  offer                DistributorOffer            @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  promoterUserId       String?                     @db.Uuid
+  quantity             Int
+  quotedUnitPricePaise Int
+  quotedBenefitPaise   Int
+  tokenHash            String                      @unique
+  tokenSalt            String
+  status               KisanClubBenefitTokenStatus @default(ISSUED)
+  expiresAt            DateTime                    @db.Timestamptz(6)
+  attemptCount         Int                         @default(0)
+  consumedAt           DateTime?                   @db.Timestamptz(6)
+  consumedByUserId     String?                     @db.Uuid
+  productOrderId       String?                     @unique @db.Uuid
+  productOrder         ProductOrder?               @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  redemption           KisanClubBenefitRedemption?
+  createdAt            DateTime                    @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime                    @updatedAt @db.Timestamptz(6)
+
+  @@index([membershipId, status])
+  @@index([status, expiresAt])
+  @@index([promoterUserId, status])
+}
+
+model KisanClubFulfilmentAssignment {
+  id             String                             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId String                             @unique @db.Uuid
+  productOrder   ProductOrder                       @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  membershipId   String                             @db.Uuid
+  membership     KisanClubMembership                @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  promoterUserId String                             @db.Uuid
+  promoterUser   User                               @relation("ClubFulfilmentPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  mode           KisanClubFulfilmentMode
+  status         KisanClubFulfilmentStatus          @default(ASSIGNED)
+  assignedAt     DateTime                           @default(now()) @db.Timestamptz(6)
+  acceptedAt     DateTime?                          @db.Timestamptz(6)
+  completedAt    DateTime?                          @db.Timestamptz(6)
+  failureReason  String?
+  statusHistory  KisanClubFulfilmentStatusHistory[]
+  createdAt      DateTime                           @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                           @updatedAt @db.Timestamptz(6)
+
+  @@index([promoterUserId, status])
+  @@index([membershipId, status])
+  @@index([status, assignedAt])
+}
+
+model KisanClubFulfilmentStatusHistory {
+  id              String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assignmentId    String                        @db.Uuid
+  assignment      KisanClubFulfilmentAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  fromStatus      KisanClubFulfilmentStatus?
+  toStatus        KisanClubFulfilmentStatus
+  changedByUserId String?                       @db.Uuid
+  changedBy       User?                         @relation("ClubFulfilmentStatusChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
+  changedByRole   PlatformRole?
+  reason          String?
+  requestId       String?
+  createdAt       DateTime                      @default(now()) @db.Timestamptz(6)
+
+  @@index([assignmentId, createdAt])
+  @@index([changedByUserId, createdAt])
+}
+
+model Crop {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code       String          @unique
+  nameEn     String
+  nameHi     String
+  isActive   Boolean         @default(true)
+  cropCycles FarmCropCycle[]
+  createdAt  DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime        @updatedAt @db.Timestamptz(6)
+
+  @@index([isActive, nameEn])
+}
+
+model Farm {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  membershipId       String?              @db.Uuid
+  membership         KisanClubMembership? @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  farmerProfileId    String               @db.Uuid
+  farmerProfile      FarmerProfile        @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  name               String
+  village            String?
+  district           String?
+  state              String?
+  pincode            String
+  areaAcres          Decimal              @db.Decimal(10, 3)
+  ownershipType      FarmOwnershipType
+  irrigationSource   IrrigationSource?
+  soilType           String?
+  latitude           Decimal?             @db.Decimal(9, 6)
+  longitude          Decimal?             @db.Decimal(9, 6)
+  locationCapturedAt DateTime?            @db.Timestamptz(6)
+  isActive           Boolean              @default(true)
+  cropCycles         FarmCropCycle[]
+  createdAt          DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(6)
+
+  @@index([membershipId, isActive])
+  @@index([farmerProfileId, isActive])
+  @@index([pincode])
+  @@index([district, state])
+}
+
+model FarmCropCycle {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  farmId              String          @db.Uuid
+  farm                Farm            @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  cropId              String          @db.Uuid
+  crop                Crop            @relation(fields: [cropId], references: [id], onDelete: Restrict)
+  varietyName         String?
+  varietyProductId    String?         @db.Uuid
+  varietyProduct      MasterProduct?  @relation(fields: [varietyProductId], references: [id], onDelete: SetNull)
+  areaAcres           Decimal         @db.Decimal(10, 3)
+  season              String
+  sowingDate          DateTime?       @db.Date
+  expectedHarvestDate DateTime?       @db.Date
+  actualHarvestDate   DateTime?       @db.Date
+  status              CropCycleStatus @default(ACTIVE)
+  yieldQuintals       Decimal?        @db.Decimal(10, 3)
+  activities          FarmActivity[]
+  advisoryEvents      AdvisoryEvent[]
+  createdAt           DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @db.Timestamptz(6)
+
+  @@index([farmId, status])
+  @@index([cropId, season, status])
+  @@index([status, sowingDate])
+}
+
+model AdvisoryRule {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cropName           String
+  varietyName        String?
+  category           AdvisoryCategory
+  minDaysAfterSowing Int
+  maxDaysAfterSowing Int
+  eligibleStates     String[]           @default([])
+  eligibleDistricts  String[]           @default([])
+  seasons            String[]           @default([])
+  titleEn            String
+  bodyEn             String
+  titleHi            String
+  bodyHi             String
+  status             AdvisoryRuleStatus @default(DRAFT)
+  version            Int                @default(1)
+  authoredByUserId   String?            @db.Uuid
+  reviewedByUserId   String?            @db.Uuid
+  reviewedAt         DateTime?          @db.Timestamptz(6)
+  reviewReason       String?
+  sourceReference    String?
+  createdAt          DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
+  events             AdvisoryEvent[]
+
+  @@index([cropName, status, minDaysAfterSowing])
+  @@index([status, category])
+}
+
+model AdvisoryEvent {
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cropCycleId    String              @db.Uuid
+  cropCycle      FarmCropCycle       @relation(fields: [cropCycleId], references: [id], onDelete: Restrict)
+  membershipId   String              @db.Uuid
+  membership     KisanClubMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  advisoryRuleId String              @db.Uuid
+  advisoryRule   AdvisoryRule        @relation(fields: [advisoryRuleId], references: [id], onDelete: Restrict)
+  ruleVersion    Int
+  status         AdvisoryEventStatus @default(PENDING)
+  dueOn          DateTime            @db.Date
+  notificationId String?             @db.Uuid
+  readAt         DateTime?           @db.Timestamptz(6)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(6)
+
+  @@unique([cropCycleId, advisoryRuleId, ruleVersion])
+  @@index([membershipId, status, dueOn])
+}
+
+model FarmActivity {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cropCycleId      String             @db.Uuid
+  cropCycle        FarmCropCycle      @relation(fields: [cropCycleId], references: [id], onDelete: Restrict)
+  activityType     FarmActivityType
+  occurredOn       DateTime           @db.Date
+  notes            String?
+  productOrderId   String?            @db.Uuid
+  productOrder     ProductOrder?      @relation(fields: [productOrderId], references: [id], onDelete: SetNull)
+  recordedSource   FarmActivitySource
+  recordedByUserId String?            @db.Uuid
+  recordedBy       User?              @relation("FarmActivityRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime           @default(now()) @db.Timestamptz(6)
+
+  @@index([cropCycleId, occurredOn])
+  @@index([activityType, occurredOn])
+  @@index([productOrderId])
 }
 
 model FarmerAddress {
@@ -345,6 +1096,7 @@ model FarmerAddress {
   city                   String
   district               String?
   state                  String
+  stateCode              String?
   pincode                String
   landmark               String?
   isDefault              Boolean           @default(false)
@@ -365,7 +1117,13 @@ model Organisation {
   legalName                        String
   displayName                      String
   gstin                            String?
+  registeredStateCode              String?
+  gstinVerifiedAt                  DateTime?                   @db.Timestamptz(6)
   status                           OrganisationStatus          @default(PENDING_VERIFICATION)
+  returnRequests                   ReturnRequest[]             @relation("ReturnRequestDistributor")
+  sellerDisputes                   Dispute[]                   @relation("DisputeDistributorOrganisation")
+  disputesAgainstOrganisation      Dispute[]                   @relation("DisputeAgainstOrganisation")
+  returnPickupAssignments          ReturnPickupAssignment[]    @relation("ReturnPickupDistributor")
   reviewedAt                       DateTime?                   @db.Timestamptz(6)
   reviewedByUserId                 String?                     @db.Uuid
   reviewedBy                       User?                       @relation("OrganisationReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
@@ -383,21 +1141,103 @@ model Organisation {
   cartItems                        CartItem[]
   sellerProductOrders              ProductOrder[]              @relation("SellerProductOrders")
   sellerProductInvoices            ProductInvoice[]            @relation("SellerProductInvoices")
+  invoiceSequences                 InvoiceSequence[]
+  creditNoteSequences              CreditNoteSequence[]
+  creditNotes                      CreditNote[]
   sellerProductDispatches          ProductDispatch[]           @relation("SellerProductDispatches")
   sellerProductDeliveryAssignments ProductDeliveryAssignment[] @relation("SellerProductDeliveryAssignments")
+  deliveryPartnerProfiles          DeliveryPartnerProfile[]    @relation("DeliveryPartnerProfileOrganisation")
+  farmerLeads                      FarmerLead[]                @relation("FarmerLeadOrganisation")
+  promoterVisits                   PromoterVisit[]             @relation("PromoterVisitOrganisation")
   auditLogs                        AuditLog[]
   sellerCommissionRules            CommissionRule[]            @relation("SellerCommissionRules")
   sellerCommissionEntries          CommissionEntry[]           @relation("SellerCommissionEntries")
   financialLedgerEntries           FinancialLedgerEntry[]      @relation("OrganisationFinancialLedgerEntries")
   sellerSettlements                Settlement[]                @relation("SellerSettlements")
   promoterAttributions             PromoterAttribution[]       @relation("PromoterAttributionOrganisation")
+  kisanClubPromoterProfiles        KisanClubPromoterProfile[]  @relation("ClubPromoterOrganisation")
   supportTickets                   SupportTicket[]
+  storedFiles                      StoredFile[]                @relation("StoredFileOrganisation")
   createdAt                        DateTime                    @default(now()) @db.Timestamptz(6)
   updatedAt                        DateTime                    @updatedAt @db.Timestamptz(6)
   productOrderItems                ProductOrderItem[]
 
   @@index([type, status])
   @@index([reviewedByUserId, reviewedAt])
+}
+
+model DeliveryPartnerProfile {
+  id                    String                            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String                            @db.Uuid
+  user                  User                              @relation("DeliveryPartnerProfileUser", fields: [userId], references: [id], onDelete: Restrict)
+  organisationId        String                            @db.Uuid
+  organisation          Organisation                      @relation("DeliveryPartnerProfileOrganisation", fields: [organisationId], references: [id], onDelete: Restrict)
+  availabilityStatus    DeliveryPartnerAvailabilityStatus @default(OFFLINE)
+  availabilityChangedAt DateTime?                         @db.Timestamptz(6)
+  createdAt             DateTime                          @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime                          @updatedAt @db.Timestamptz(6)
+
+  @@unique([userId, organisationId])
+  @@index([organisationId, availabilityStatus])
+}
+
+model FarmerLead {
+  id                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  promoterUserId           String           @db.Uuid
+  promoterUser             User             @relation("FarmerLeadPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  promoterOrganisationId   String           @db.Uuid
+  promoterOrganisation     Organisation     @relation("FarmerLeadOrganisation", fields: [promoterOrganisationId], references: [id], onDelete: Restrict)
+  fullName                 String
+  phone                    String
+  source                   FarmerLeadSource
+  status                   FarmerLeadStatus @default(NEW)
+  village                  String?
+  district                 String?
+  state                    String?
+  pincode                  String?
+  cropInterests            String[]         @default([])
+  notes                    String?
+  statusReason             String?
+  contactedAt              DateTime?        @db.Timestamptz(6)
+  convertedAt              DateTime?        @db.Timestamptz(6)
+  lostAt                   DateTime?        @db.Timestamptz(6)
+  convertedFarmerProfileId String?          @db.Uuid
+  convertedFarmerProfile   FarmerProfile?   @relation("FarmerLeadConvertedProfile", fields: [convertedFarmerProfileId], references: [id], onDelete: Restrict)
+  promoterVisits           PromoterVisit[]
+  createdAt                DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime         @updatedAt @db.Timestamptz(6)
+
+  @@index([promoterUserId, status, updatedAt])
+  @@index([promoterOrganisationId, status, updatedAt])
+  @@index([phone])
+  @@index([convertedFarmerProfileId])
+}
+
+model PromoterVisit {
+  id                     String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  promoterUserId         String                      @db.Uuid
+  promoterUser           User                        @relation("PromoterVisitPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  promoterOrganisationId String                      @db.Uuid
+  promoterOrganisation   Organisation                @relation("PromoterVisitOrganisation", fields: [promoterOrganisationId], references: [id], onDelete: Restrict)
+  farmerLeadId           String?                     @db.Uuid
+  farmerLead             FarmerLead?                 @relation(fields: [farmerLeadId], references: [id], onDelete: Restrict)
+  farmerProfileId        String?                     @db.Uuid
+  farmerProfile          FarmerProfile?              @relation("PromoterVisitFarmer", fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  purpose                PromoterVisitPurpose
+  notes                  String?
+  occurredAt             DateTime                    @db.Timestamptz(6)
+  locationStatus         PromoterVisitLocationStatus @default(NOT_REQUESTED)
+  latitude               Decimal?                    @db.Decimal(9, 6)
+  longitude              Decimal?                    @db.Decimal(9, 6)
+  accuracyMetres         Decimal?                    @db.Decimal(8, 2)
+  locationCapturedAt     DateTime?                   @db.Timestamptz(6)
+  createdAt              DateTime                    @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime                    @updatedAt @db.Timestamptz(6)
+
+  @@index([promoterUserId, occurredAt])
+  @@index([promoterOrganisationId, occurredAt])
+  @@index([farmerLeadId, occurredAt])
+  @@index([farmerProfileId, occurredAt])
 }
 
 model CompanyProfile {
@@ -451,7 +1291,11 @@ model KycDocument {
   status          KycDocumentStatus @default(SUBMITTED)
   documentNumber  String?
   fileName        String?
+  /// Legacy free-text key from the metadata-only era. New uploads populate
+  /// `storedFileId` instead; this stays for rows created before WP-08.
   storageKey      String?
+  storedFileId    String?           @db.Uuid
+  storedFile      StoredFile?       @relation("KycDocumentStoredFile", fields: [storedFileId], references: [id], onDelete: Restrict)
   issuedAt        DateTime?         @db.Timestamptz(6)
   expiresAt       DateTime?         @db.Timestamptz(6)
   rejectionReason String?
@@ -485,30 +1329,37 @@ model Brand {
 }
 
 model MasterProduct {
-  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyOrganisationId String              @db.Uuid
-  companyOrganisation   Organisation        @relation("CompanyProducts", fields: [companyOrganisationId], references: [id], onDelete: Restrict)
-  brandId               String              @db.Uuid
-  brand                 Brand               @relation(fields: [brandId], references: [id], onDelete: Restrict)
-  name                  String
-  slug                  String
-  category              String
-  description           String?
-  cropTargets           String[]            @default([])
-  status                CatalogueStatus     @default(DRAFT)
-  reviewedAt            DateTime?           @db.Timestamptz(6)
-  reviewedByUserId      String?             @db.Uuid
-  reviewedBy            User?               @relation("ProductReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
-  reviewReason          String?
-  variants              ProductVariant[]
-  documents             ProductDocument[]
-  inventoryBatches      InventoryBatch[]
-  inventoryMovements    InventoryMovement[]
-  distributorOffers     DistributorOffer[]
-  cartItems             CartItem[]
-  productOrderItems     ProductOrderItem[]
-  createdAt             DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime            @updatedAt @db.Timestamptz(6)
+  id                       String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyOrganisationId    String                      @db.Uuid
+  companyOrganisation      Organisation                @relation("CompanyProducts", fields: [companyOrganisationId], references: [id], onDelete: Restrict)
+  brandId                  String                      @db.Uuid
+  brand                    Brand                       @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  name                     String
+  slug                     String
+  category                 String
+  description              String?
+  cropTargets              String[]                    @default([])
+  /// Pack shot shown to farmers. Nullable because a product can be approved and
+  /// sellable before its photography exists; the apps fall back to a labelled
+  /// placeholder rather than a broken image.
+  primaryImageStoredFileId String?                     @db.Uuid
+  primaryImage             StoredFile?                 @relation("ProductPrimaryImage", fields: [primaryImageStoredFileId], references: [id], onDelete: SetNull)
+  status                   CatalogueStatus             @default(DRAFT)
+  reviewedAt               DateTime?                   @db.Timestamptz(6)
+  reviewedByUserId         String?                     @db.Uuid
+  reviewedBy               User?                       @relation("ProductReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewReason             String?
+  variants                 ProductVariant[]
+  documents                ProductDocument[]
+  inventoryBatches         InventoryBatch[]
+  inventoryMovements       InventoryMovement[]
+  distributorOffers        DistributorOffer[]
+  cartItems                CartItem[]
+  productOrderItems        ProductOrderItem[]
+  farmCropCycles           FarmCropCycle[]
+  kisanClubProgrammes      KisanClubProductProgramme[]
+  createdAt                DateTime                    @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime                    @updatedAt @db.Timestamptz(6)
 
   @@unique([companyOrganisationId, slug])
   @@index([brandId, status])
@@ -517,22 +1368,25 @@ model MasterProduct {
 }
 
 model ProductVariant {
-  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  productId          String              @db.Uuid
-  product            MasterProduct       @relation(fields: [productId], references: [id], onDelete: Restrict)
-  sku                String?
-  variantName        String
-  packSize           Decimal             @db.Decimal(12, 3)
-  packUnit           String
-  mrpPaise           Int?
-  isActive           Boolean             @default(true)
-  inventoryBatches   InventoryBatch[]
-  inventoryMovements InventoryMovement[]
-  distributorOffers  DistributorOffer[]
-  cartItems          CartItem[]
-  productOrderItems  ProductOrderItem[]
-  createdAt          DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime            @updatedAt @db.Timestamptz(6)
+  id                  String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId           String                      @db.Uuid
+  product             MasterProduct               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sku                 String?
+  variantName         String
+  packSize            Decimal                     @db.Decimal(12, 3)
+  packUnit            String
+  mrpPaise            Int?
+  hsnCode             String?
+  gstRateBps          Int?
+  isActive            Boolean                     @default(true)
+  inventoryBatches    InventoryBatch[]
+  inventoryMovements  InventoryMovement[]
+  distributorOffers   DistributorOffer[]
+  cartItems           CartItem[]
+  productOrderItems   ProductOrderItem[]
+  kisanClubProgrammes KisanClubProductProgramme[]
+  createdAt           DateTime                    @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                    @updatedAt @db.Timestamptz(6)
 
   @@unique([productId, sku])
   @@index([productId, isActive])
@@ -602,6 +1456,7 @@ model InventoryBatch {
   distributorOffers            DistributorOffer[]
   cartItems                    CartItem[]
   productOrderItemReservations ProductOrderItemReservation[]
+  returnInspectionDispositions ReturnInspectionDisposition[]
   createdAt                    DateTime                      @default(now()) @db.Timestamptz(6)
   updatedAt                    DateTime                      @updatedAt @db.Timestamptz(6)
 
@@ -633,6 +1488,7 @@ model InventoryMovement {
   createdByUserId             String?                      @db.Uuid
   createdBy                   User?                        @relation("InventoryMovementCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   productOrderItemReservation ProductOrderItemReservation?
+  returnInspectionDisposition ReturnInspectionDisposition?
   createdAt                   DateTime                     @default(now()) @db.Timestamptz(6)
 
   @@index([batchId, createdAt])
@@ -643,33 +1499,34 @@ model InventoryMovement {
 }
 
 model DistributorOffer {
-  id                        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  distributorOrganisationId String                 @db.Uuid
-  distributorOrganisation   Organisation           @relation("DistributorOffers", fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
-  productId                 String                 @db.Uuid
-  product                   MasterProduct          @relation(fields: [productId], references: [id], onDelete: Restrict)
-  variantId                 String                 @db.Uuid
-  variant                   ProductVariant         @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  warehouseId               String                 @db.Uuid
-  warehouse                 Warehouse              @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  batchId                   String?                @db.Uuid
-  batch                     InventoryBatch?        @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  id                        String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  distributorOrganisationId String                  @db.Uuid
+  distributorOrganisation   Organisation            @relation("DistributorOffers", fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
+  productId                 String                  @db.Uuid
+  product                   MasterProduct           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId                 String                  @db.Uuid
+  variant                   ProductVariant          @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  warehouseId               String                  @db.Uuid
+  warehouse                 Warehouse               @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  batchId                   String?                 @db.Uuid
+  batch                     InventoryBatch?         @relation(fields: [batchId], references: [id], onDelete: Restrict)
   offerCode                 String?
   sellingPricePaise         Int
-  minimumOrderQuantity      Int                    @default(1)
+  minimumOrderQuantity      Int                     @default(1)
   maximumOrderQuantity      Int?
-  serviceablePincodes       String[]               @default([])
+  serviceablePincodes       String[]                @default([])
   fulfilmentMode            FulfilmentMode
   deliverySlaDays           Int?
-  status                    DistributorOfferStatus @default(DRAFT)
-  reviewedAt                DateTime?              @db.Timestamptz(6)
-  reviewedByUserId          String?                @db.Uuid
-  reviewedBy                User?                  @relation("OfferReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  status                    DistributorOfferStatus  @default(DRAFT)
+  reviewedAt                DateTime?               @db.Timestamptz(6)
+  reviewedByUserId          String?                 @db.Uuid
+  reviewedBy                User?                   @relation("OfferReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
   reviewReason              String?
   cartItems                 CartItem[]
   productOrderItems         ProductOrderItem[]
-  createdAt                 DateTime               @default(now()) @db.Timestamptz(6)
-  updatedAt                 DateTime               @updatedAt @db.Timestamptz(6)
+  kisanClubBenefitTokens    KisanClubBenefitToken[]
+  createdAt                 DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                @updatedAt @db.Timestamptz(6)
 
   @@unique([distributorOrganisationId, offerCode])
   @@index([distributorOrganisationId, status])
@@ -687,6 +1544,7 @@ model Cart {
   deliveryAddress    FarmerAddress?    @relation("CartDeliveryAddress", fields: [deliveryAddressId], references: [id], onDelete: SetNull)
   serviceablePincode String?
   status             CartStatus        @default(ACTIVE)
+  kisanClubContext   Boolean           @default(false)
   items              CartItem[]
   productCheckouts   ProductCheckout[] @relation("CheckoutSourceCart")
   createdAt          DateTime          @default(now()) @db.Timestamptz(6)
@@ -714,6 +1572,7 @@ model CartItem {
   batch                      InventoryBatch?  @relation(fields: [batchId], references: [id], onDelete: Restrict)
   quantity                   Int
   priceSnapshotPaise         Int
+  clubBenefitSnapshotPaise   Int              @default(0)
   availableQuantitySnapshot  Int
   serviceablePincodeSnapshot String
   productNameSnapshot        String
@@ -744,6 +1603,8 @@ model ProductCheckout {
   serviceablePincode         String
   status                     ProductCheckoutStatus       @default(PENDING_PAYMENT)
   subtotalPaise              Int
+  clubBenefitPaise           Int                         @default(0)
+  farmerPayablePaise         Int
   itemCount                  Int
   childOrderCount            Int
   orders                     ProductOrder[]
@@ -760,34 +1621,46 @@ model ProductCheckout {
 }
 
 model ProductOrder {
-  id                      String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  checkoutId              String                      @db.Uuid
-  checkout                ProductCheckout             @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
-  orderType               OrderType                   @default(PRODUCT_ORDER)
-  farmerProfileId         String                      @db.Uuid
-  farmerProfile           FarmerProfile               @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
-  deliveryAddressId       String?                     @db.Uuid
-  deliveryAddress         FarmerAddress?              @relation("ProductOrderDeliveryAddress", fields: [deliveryAddressId], references: [id], onDelete: SetNull)
-  sellerOrganisationId    String                      @db.Uuid
-  sellerOrganisation      Organisation                @relation("SellerProductOrders", fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
-  orderNumber             String                      @unique
-  status                  ProductOrderStatus          @default(PENDING_PAYMENT)
-  serviceablePincode      String
-  sellerNameSnapshot      String
-  sellerGstinSnapshot     String?
-  deliveryAddressSnapshot Json
-  subtotalPaise           Int
-  itemCount               Int
-  items                   ProductOrderItem[]
-  statusHistory           ProductOrderStatusHistory[]
-  invoice                 ProductInvoice?
-  dispatch                ProductDispatch?
-  deliveryAssignment      ProductDeliveryAssignment?
-  commissionEntries       CommissionEntry[]
-  financialLedgerEntries  FinancialLedgerEntry[]
-  supportTickets          SupportTicket[]
-  createdAt               DateTime                    @default(now()) @db.Timestamptz(6)
-  updatedAt               DateTime                    @updatedAt @db.Timestamptz(6)
+  id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  checkoutId                    String                         @db.Uuid
+  checkout                      ProductCheckout                @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
+  orderType                     OrderType                      @default(PRODUCT_ORDER)
+  farmerProfileId               String                         @db.Uuid
+  farmerProfile                 FarmerProfile                  @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  deliveryAddressId             String?                        @db.Uuid
+  deliveryAddress               FarmerAddress?                 @relation("ProductOrderDeliveryAddress", fields: [deliveryAddressId], references: [id], onDelete: SetNull)
+  sellerOrganisationId          String                         @db.Uuid
+  sellerOrganisation            Organisation                   @relation("SellerProductOrders", fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
+  orderNumber                   String                         @unique
+  status                        ProductOrderStatus             @default(PENDING_PAYMENT)
+  serviceablePincode            String
+  sellerNameSnapshot            String
+  sellerGstinSnapshot           String?
+  deliveryAddressSnapshot       Json
+  subtotalPaise                 Int
+  clubBenefitPaise              Int                            @default(0)
+  farmerPayablePaise            Int
+  isKisanClubOrder              Boolean                        @default(false)
+  itemCount                     Int
+  items                         ProductOrderItem[]
+  statusHistory                 ProductOrderStatusHistory[]
+  invoice                       ProductInvoice?
+  dispatch                      ProductDispatch?
+  deliveryAssignment            ProductDeliveryAssignment?
+  commissionEntries             CommissionEntry[]
+  financialLedgerEntries        FinancialLedgerEntry[]
+  supportTickets                SupportTicket[]
+  returnRequests                ReturnRequest[]
+  disputes                      Dispute[]
+  returnPickupAssignment        ReturnPickupAssignment?
+  refunds                       Refund[]
+  creditNotes                   CreditNote[]
+  farmActivities                FarmActivity[]
+  kisanClubRedemptions          KisanClubBenefitRedemption[]
+  kisanClubFulfilmentAssignment KisanClubFulfilmentAssignment?
+  kisanClubBenefitToken         KisanClubBenefitToken?
+  createdAt                     DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt                     DateTime                       @updatedAt @db.Timestamptz(6)
 
   @@index([checkoutId])
   @@index([farmerProfileId, createdAt])
@@ -809,12 +1682,21 @@ model ProductInvoice {
   status                    ProductInvoiceStatus @default(GENERATED)
   currency                  String               @default("INR")
   subtotalPaise             Int
+  taxableAmountPaise        Int                  @default(0)
   taxPaise                  Int                  @default(0)
+  cgstPaise                 Int                  @default(0)
+  sgstPaise                 Int                  @default(0)
+  igstPaise                 Int                  @default(0)
   totalPaise                Int
   itemCount                 Int
   sellerLegalNameSnapshot   String
   sellerDisplayNameSnapshot String
   sellerGstinSnapshot       String?
+  sellerStateCodeSnapshot   String?
+  sellerAddressSnapshot     String?
+  placeOfSupplyStateCode    String?
+  financialYear             String?
+  sequenceNumber            Int?
   farmerNameSnapshot        String
   deliveryAddressSnapshot   Json
   lineItemsSnapshot         Json
@@ -822,6 +1704,8 @@ model ProductInvoice {
   generatedBy               User?                @relation("ProductInvoiceGeneratedBy", fields: [generatedByUserId], references: [id], onDelete: SetNull)
   generatedByRole           PlatformRole?
   dispatch                  ProductDispatch?
+  document                  ProductInvoiceDocument?
+  creditNotes               CreditNote[]
   generatedAt               DateTime             @default(now()) @db.Timestamptz(6)
   createdAt                 DateTime             @default(now()) @db.Timestamptz(6)
   updatedAt                 DateTime             @updatedAt @db.Timestamptz(6)
@@ -829,8 +1713,133 @@ model ProductInvoice {
   @@index([checkoutId])
   @@index([farmerProfileId, generatedAt])
   @@index([sellerOrganisationId, generatedAt])
+  @@unique([sellerOrganisationId, financialYear, sequenceNumber])
   @@index([generatedByUserId, generatedAt])
   @@index([status, generatedAt])
+}
+
+enum ProductInvoiceDocumentStatus {
+  QUEUED
+  PROCESSING
+  AVAILABLE
+  FAILED
+}
+
+/// Durable generation state for the immutable PDF representation of an invoice.
+/// The database is the source of truth; Redis only carries this row's id.
+model ProductInvoiceDocument {
+  id                    String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productInvoiceId      String                       @unique @db.Uuid
+  productInvoice        ProductInvoice               @relation(fields: [productInvoiceId], references: [id], onDelete: Restrict)
+  storedFileId          String?                      @unique @db.Uuid
+  storedFile            StoredFile?                  @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+  status                ProductInvoiceDocumentStatus @default(QUEUED)
+  requestedByUserId     String                       @db.Uuid
+  requestedByRole       PlatformRole
+  requestId             String?
+  attemptCount          Int                          @default(0)
+  lastError             String?
+  generatedAt           DateTime?                    @db.Timestamptz(6)
+  createdAt             DateTime                     @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime                     @updatedAt @db.Timestamptz(6)
+
+  @@index([status, updatedAt])
+  @@index([requestedByUserId, createdAt])
+}
+
+model InvoiceSequence {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sellerOrganisationId String       @db.Uuid
+  sellerOrganisation   Organisation @relation(fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
+  financialYear        String
+  lastNumber           Int
+  createdAt            DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @db.Timestamptz(6)
+
+  @@unique([sellerOrganisationId, financialYear])
+  @@index([financialYear])
+}
+
+model CreditNoteSequence {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sellerOrganisationId String       @db.Uuid
+  sellerOrganisation   Organisation @relation(fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
+  financialYear        String
+  lastNumber           Int
+  createdAt            DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @db.Timestamptz(6)
+
+  @@unique([sellerOrganisationId, financialYear])
+  @@index([financialYear])
+}
+
+model CreditNote {
+  id                        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  refundId                  String       @unique @db.Uuid
+  refund                    Refund       @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  productInvoiceId          String       @db.Uuid
+  productInvoice            ProductInvoice @relation(fields: [productInvoiceId], references: [id], onDelete: Restrict)
+  productOrderId            String       @db.Uuid
+  productOrder              ProductOrder @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  returnRequestId           String?      @db.Uuid
+  sellerOrganisationId      String       @db.Uuid
+  sellerOrganisation        Organisation @relation(fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
+  creditNoteNumber          String
+  financialYear             String
+  sequenceNumber            Int
+  currency                  String       @default("INR")
+  grossCreditPaise          Int
+  farmerRefundPaise         Int
+  subsidyReversalPaise      Int          @default(0)
+  taxableAmountPaise        Int
+  taxPaise                  Int
+  cgstPaise                 Int
+  sgstPaise                 Int
+  igstPaise                 Int
+  originalInvoiceNumber     String
+  originalInvoiceDate       DateTime     @db.Timestamptz(6)
+  reasonSnapshot            String
+  sellerLegalNameSnapshot   String
+  sellerGstinSnapshot       String
+  sellerStateCodeSnapshot   String
+  sellerAddressSnapshot     String
+  farmerNameSnapshot        String
+  deliveryAddressSnapshot   Json
+  placeOfSupplyStateCode    String
+  lineItemsSnapshot         Json
+  issuedAt                  DateTime     @default(now()) @db.Timestamptz(6)
+  document                  CreditNoteDocument?
+  createdAt                 DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime     @updatedAt @db.Timestamptz(6)
+
+  @@unique([sellerOrganisationId, financialYear, sequenceNumber])
+  @@unique([sellerOrganisationId, creditNoteNumber])
+  @@index([productOrderId, issuedAt])
+  @@index([returnRequestId])
+}
+
+enum CreditNoteDocumentStatus {
+  QUEUED
+  PROCESSING
+  AVAILABLE
+  FAILED
+}
+
+model CreditNoteDocument {
+  id                String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  creditNoteId      String                   @unique @db.Uuid
+  creditNote        CreditNote               @relation(fields: [creditNoteId], references: [id], onDelete: Restrict)
+  storedFileId      String?                  @unique @db.Uuid
+  storedFile        StoredFile?              @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+  status            CreditNoteDocumentStatus @default(QUEUED)
+  requestId         String?
+  attemptCount      Int                      @default(0)
+  lastError         String?
+  generatedAt       DateTime?                @db.Timestamptz(6)
+  createdAt         DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                 @updatedAt @db.Timestamptz(6)
+
+  @@index([status, updatedAt])
 }
 
 model ProductDispatch {
@@ -858,6 +1867,10 @@ model ProductDispatch {
   readyByUserId           String?                    @db.Uuid
   readyBy                 User?                      @relation("ProductDispatchReadyBy", fields: [readyByUserId], references: [id], onDelete: SetNull)
   readyByRole             PlatformRole?
+  packageQrHash           String?
+  packageQrIssuedAt       DateTime?                  @db.Timestamptz(6)
+  packageQrIssuedByUserId String?                    @db.Uuid
+  packageQrIssuedBy       User?                      @relation("ProductDispatchQrIssuedBy", fields: [packageQrIssuedByUserId], references: [id], onDelete: SetNull)
   deliveryAssignment      ProductDeliveryAssignment?
   readyAt                 DateTime                   @default(now()) @db.Timestamptz(6)
   createdAt               DateTime                   @default(now()) @db.Timestamptz(6)
@@ -871,49 +1884,67 @@ model ProductDispatch {
 }
 
 model ProductDeliveryAssignment {
-  id                      String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  productOrderId          String                          @unique @db.Uuid
-  productOrder            ProductOrder                    @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
-  checkoutId              String                          @db.Uuid
-  checkout                ProductCheckout                 @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
-  dispatchId              String                          @unique @db.Uuid
-  dispatch                ProductDispatch                 @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
-  farmerProfileId         String                          @db.Uuid
-  farmerProfile           FarmerProfile                   @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
-  sellerOrganisationId    String                          @db.Uuid
-  sellerOrganisation      Organisation                    @relation("SellerProductDeliveryAssignments", fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
-  deliveryPartnerUserId   String                          @db.Uuid
-  deliveryPartner         User                            @relation("ProductDeliveryPartner", fields: [deliveryPartnerUserId], references: [id], onDelete: Restrict)
-  assignmentNumber        String                          @unique
-  status                  ProductDeliveryAssignmentStatus @default(ASSIGNED)
-  serviceablePincode      String
-  dispatchNumberSnapshot  String
-  invoiceNumberSnapshot   String
-  sellerNameSnapshot      String
-  sellerGstinSnapshot     String?
-  deliveryAddressSnapshot Json
-  pickupSnapshot          Json
-  itemsSnapshot           Json
-  otpHash                 String
-  otpSalt                 String
-  otpExpiresAt            DateTime                        @db.Timestamptz(6)
-  otpAttemptCount         Int                             @default(0)
-  otpVerifiedAt           DateTime?                       @db.Timestamptz(6)
-  assignedByUserId        String?                         @db.Uuid
-  assignedBy              User?                           @relation("ProductDeliveryAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
-  assignedByRole          PlatformRole?
-  assignedAt              DateTime                        @default(now()) @db.Timestamptz(6)
-  startedByUserId         String?                         @db.Uuid
-  startedBy               User?                           @relation("ProductDeliveryStartedBy", fields: [startedByUserId], references: [id], onDelete: SetNull)
-  startedByRole           PlatformRole?
-  startedAt               DateTime?                       @db.Timestamptz(6)
-  completedByUserId       String?                         @db.Uuid
-  completedBy             User?                           @relation("ProductDeliveryCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
-  completedByRole         PlatformRole?
-  completedAt             DateTime?                       @db.Timestamptz(6)
-  deliveryProofNote       String?
-  createdAt               DateTime                        @default(now()) @db.Timestamptz(6)
-  updatedAt               DateTime                        @updatedAt @db.Timestamptz(6)
+  id                             String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId                 String                          @unique @db.Uuid
+  productOrder                   ProductOrder                    @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  checkoutId                     String                          @db.Uuid
+  checkout                       ProductCheckout                 @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
+  dispatchId                     String                          @unique @db.Uuid
+  dispatch                       ProductDispatch                 @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  farmerProfileId                String                          @db.Uuid
+  farmerProfile                  FarmerProfile                   @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  sellerOrganisationId           String                          @db.Uuid
+  sellerOrganisation             Organisation                    @relation("SellerProductDeliveryAssignments", fields: [sellerOrganisationId], references: [id], onDelete: Restrict)
+  deliveryPartnerUserId          String                          @db.Uuid
+  deliveryPartner                User                            @relation("ProductDeliveryPartner", fields: [deliveryPartnerUserId], references: [id], onDelete: Restrict)
+  assignmentNumber               String                          @unique
+  status                         ProductDeliveryAssignmentStatus @default(ASSIGNED)
+  serviceablePincode             String
+  dispatchNumberSnapshot         String
+  invoiceNumberSnapshot          String
+  sellerNameSnapshot             String
+  sellerGstinSnapshot            String?
+  deliveryAddressSnapshot        Json
+  pickupSnapshot                 Json
+  itemsSnapshot                  Json
+  otpHash                        String
+  otpSalt                        String
+  otpExpiresAt                   DateTime                        @db.Timestamptz(6)
+  otpAttemptCount                Int                             @default(0)
+  otpVerifiedAt                  DateTime?                       @db.Timestamptz(6)
+  pickupVerificationAttemptCount Int                             @default(0)
+  pickupVerifiedAt               DateTime?                       @db.Timestamptz(6)
+  pickupVerifiedByUserId         String?                         @db.Uuid
+  pickupVerifiedBy               User?                           @relation("ProductDeliveryPickupVerifiedBy", fields: [pickupVerifiedByUserId], references: [id], onDelete: SetNull)
+  pickupVerifiedByRole           PlatformRole?
+  assignedByUserId               String?                         @db.Uuid
+  assignedBy                     User?                           @relation("ProductDeliveryAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  assignedByRole                 PlatformRole?
+  assignedAt                     DateTime                        @default(now()) @db.Timestamptz(6)
+  startedByUserId                String?                         @db.Uuid
+  startedBy                      User?                           @relation("ProductDeliveryStartedBy", fields: [startedByUserId], references: [id], onDelete: SetNull)
+  startedByRole                  PlatformRole?
+  startedAt                      DateTime?                       @db.Timestamptz(6)
+  completedByUserId              String?                         @db.Uuid
+  completedBy                    User?                           @relation("ProductDeliveryCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  completedByRole                PlatformRole?
+  completedAt                    DateTime?                       @db.Timestamptz(6)
+  deliveryProofNote              String?
+  proofLocationStatus            DeliveryProofLocationStatus?
+  proofLatitude                  Float?
+  proofLongitude                 Float?
+  proofAccuracyMetres            Float?
+  proofLocationCapturedAt        DateTime?                       @db.Timestamptz(6)
+  failureAttemptCount            Int                             @default(0)
+  lastFailureReasonCode          DeliveryFailureReasonCode?
+  lastFailureNote                String?
+  lastFailedAt                   DateTime?                       @db.Timestamptz(6)
+  lastFailedByUserId             String?                         @db.Uuid
+  lastFailedBy                   User?                           @relation("ProductDeliveryFailedBy", fields: [lastFailedByUserId], references: [id], onDelete: SetNull)
+  lastFailedByRole               PlatformRole?
+  retryScheduledAt               DateTime?                       @db.Timestamptz(6)
+  createdAt                      DateTime                        @default(now()) @db.Timestamptz(6)
+  updatedAt                      DateTime                        @updatedAt @db.Timestamptz(6)
 
   @@index([checkoutId])
   @@index([farmerProfileId, assignedAt])
@@ -921,37 +1952,47 @@ model ProductDeliveryAssignment {
   @@index([deliveryPartnerUserId, status])
   @@index([assignedByUserId, assignedAt])
   @@index([startedByUserId, startedAt])
+  @@index([pickupVerifiedByUserId, pickupVerifiedAt])
   @@index([completedByUserId, completedAt])
+  @@index([lastFailedByUserId, lastFailedAt])
+  @@index([status, retryScheduledAt])
   @@index([status, assignedAt])
 }
 
 model ProductOrderItem {
-  id                        String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  productOrderId            String                        @db.Uuid
-  productOrder              ProductOrder                  @relation(fields: [productOrderId], references: [id], onDelete: Cascade)
-  sourceCartItemId          String?                       @db.Uuid
-  offerId                   String                        @db.Uuid
-  offer                     DistributorOffer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
-  distributorOrganisationId String                        @db.Uuid
-  distributorOrganisation   Organisation                  @relation(fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
-  productId                 String                        @db.Uuid
-  product                   MasterProduct                 @relation(fields: [productId], references: [id], onDelete: Restrict)
-  variantId                 String                        @db.Uuid
-  variant                   ProductVariant                @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  warehouseId               String                        @db.Uuid
-  warehouse                 Warehouse                     @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  quantity                  Int
-  unitPricePaise            Int
-  lineTotalPaise            Int
-  productNameSnapshot       String
-  variantNameSnapshot       String
-  sellerNameSnapshot        String
-  warehouseNameSnapshot     String
-  fulfilmentModeSnapshot    FulfilmentMode
-  deliverySlaDaysSnapshot   Int?
-  reservations              ProductOrderItemReservation[]
-  createdAt                 DateTime                      @default(now()) @db.Timestamptz(6)
-  updatedAt                 DateTime                      @updatedAt @db.Timestamptz(6)
+  id                         String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId             String                        @db.Uuid
+  productOrder               ProductOrder                  @relation(fields: [productOrderId], references: [id], onDelete: Cascade)
+  sourceCartItemId           String?                       @db.Uuid
+  offerId                    String                        @db.Uuid
+  offer                      DistributorOffer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  distributorOrganisationId  String                        @db.Uuid
+  distributorOrganisation    Organisation                  @relation(fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
+  productId                  String                        @db.Uuid
+  product                    MasterProduct                 @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId                  String                        @db.Uuid
+  variant                    ProductVariant                @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  warehouseId                String                        @db.Uuid
+  warehouse                  Warehouse                     @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  quantity                   Int
+  unitPricePaise             Int
+  lineTotalPaise             Int
+  hsnCodeSnapshot            String?
+  gstRateBpsSnapshot         Int?
+  clubBenefitRuleId          String?                       @db.Uuid
+  clubBenefitRule            KisanClubBenefitRule?         @relation(fields: [clubBenefitRuleId], references: [id], onDelete: Restrict)
+  clubBenefitPaise           Int                           @default(0)
+  productNameSnapshot        String
+  variantNameSnapshot        String
+  sellerNameSnapshot         String
+  warehouseNameSnapshot      String
+  fulfilmentModeSnapshot     FulfilmentMode
+  deliverySlaDaysSnapshot    Int?
+  reservations               ProductOrderItemReservation[]
+  returnRequestItems         ReturnRequestItem[]
+  kisanClubBenefitRedemption KisanClubBenefitRedemption?
+  createdAt                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updatedAt                  DateTime                      @updatedAt @db.Timestamptz(6)
 
   @@index([productOrderId])
   @@index([sourceCartItemId])
@@ -962,15 +2003,16 @@ model ProductOrderItem {
 }
 
 model ProductOrderItemReservation {
-  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  productOrderItemId  String            @db.Uuid
-  productOrderItem    ProductOrderItem  @relation(fields: [productOrderItemId], references: [id], onDelete: Cascade)
-  batchId             String            @db.Uuid
-  batch               InventoryBatch    @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  inventoryMovementId String            @unique @db.Uuid
-  inventoryMovement   InventoryMovement @relation(fields: [inventoryMovementId], references: [id], onDelete: Restrict)
-  quantity            Int
-  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  id                           String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderItemId           String                        @db.Uuid
+  productOrderItem             ProductOrderItem              @relation(fields: [productOrderItemId], references: [id], onDelete: Cascade)
+  batchId                      String                        @db.Uuid
+  batch                        InventoryBatch                @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  inventoryMovementId          String                        @unique @db.Uuid
+  inventoryMovement            InventoryMovement             @relation(fields: [inventoryMovementId], references: [id], onDelete: Restrict)
+  quantity                     Int
+  returnInspectionDispositions ReturnInspectionDisposition[]
+  createdAt                    DateTime                      @default(now()) @db.Timestamptz(6)
 
   @@index([productOrderItemId])
   @@index([batchId])
@@ -994,27 +2036,309 @@ model ProductOrderStatusHistory {
   @@index([actorUserId, createdAt])
 }
 
+model ReturnRequest {
+  id                        String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId            String                        @unique @db.Uuid
+  productOrder              ProductOrder                  @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  farmerProfileId           String                        @db.Uuid
+  farmerProfile             FarmerProfile                 @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  farmerUserId              String                        @db.Uuid
+  farmerUser                User                          @relation("ReturnRequestFarmerUser", fields: [farmerUserId], references: [id], onDelete: Restrict)
+  distributorOrganisationId String                        @db.Uuid
+  distributorOrganisation   Organisation                  @relation("ReturnRequestDistributor", fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
+  status                    ReturnRequestStatus           @default(REQUESTED)
+  reasonCode                ReturnReasonCode
+  reasonNote                String?
+  requestedAt               DateTime                      @default(now()) @db.Timestamptz(6)
+  windowExpiresAt           DateTime                      @db.Timestamptz(6)
+  refundableAmountPaise     Int
+  approvedRefundAmountPaise Int?
+  inspectedByUserId         String?                       @db.Uuid
+  inspectedByUser           User?                         @relation("ReturnRequestInspectedBy", fields: [inspectedByUserId], references: [id], onDelete: SetNull)
+  inspectedAt               DateTime?                     @db.Timestamptz(6)
+  inspectionNote            String?
+  items                     ReturnRequestItem[]
+  statusHistory             ReturnRequestStatusHistory[]
+  inspectionDispositions    ReturnInspectionDisposition[]
+  refunds                   Refund[]
+  pickupAssignment          ReturnPickupAssignment?
+  evidence                  ReturnRequestEvidence[]
+  disputes                  Dispute[]
+  createdAt                 DateTime                      @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                      @updatedAt @db.Timestamptz(6)
+
+  @@index([farmerProfileId, createdAt])
+  @@index([farmerUserId, createdAt])
+  @@index([distributorOrganisationId, status])
+  @@index([status, createdAt])
+}
+
+model ReturnRequestItem {
+  id                     String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  returnRequestId        String                        @db.Uuid
+  returnRequest          ReturnRequest                 @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  productOrderItemId     String                        @db.Uuid
+  productOrderItem       ProductOrderItem              @relation(fields: [productOrderItemId], references: [id], onDelete: Restrict)
+  quantity               Int
+  unitPricePaise         Int
+  clubBenefitPaise       Int                           @default(0)
+  lineRefundPaise        Int
+  inspectionDispositions ReturnInspectionDisposition[]
+  createdAt              DateTime                      @default(now()) @db.Timestamptz(6)
+
+  @@unique([returnRequestId, productOrderItemId])
+  @@index([productOrderItemId])
+}
+
+model ReturnPickupAssignment {
+  id                        String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  returnRequestId           String                       @unique @db.Uuid
+  returnRequest             ReturnRequest                @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  productOrderId            String                       @unique @db.Uuid
+  productOrder              ProductOrder                 @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  distributorOrganisationId String                       @db.Uuid
+  distributorOrganisation   Organisation                 @relation("ReturnPickupDistributor", fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
+  farmerUserId              String                       @db.Uuid
+  farmerUser                User                         @relation("ReturnPickupFarmer", fields: [farmerUserId], references: [id], onDelete: Restrict)
+  deliveryPartnerUserId     String                       @db.Uuid
+  deliveryPartner           User                         @relation("ReturnPickupPartner", fields: [deliveryPartnerUserId], references: [id], onDelete: Restrict)
+  assignmentNumber          String                       @unique
+  status                    ReturnPickupAssignmentStatus @default(ASSIGNED)
+  orderNumberSnapshot       String
+  sellerNameSnapshot        String
+  pickupAddressSnapshot     Json
+  itemsSnapshot             Json
+  assignedByUserId          String?                      @db.Uuid
+  assignedBy                User?                        @relation("ReturnPickupAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  assignedByRole            PlatformRole?
+  assignedAt                DateTime                     @default(now()) @db.Timestamptz(6)
+  respondedByUserId         String?                      @db.Uuid
+  respondedBy               User?                        @relation("ReturnPickupRespondedBy", fields: [respondedByUserId], references: [id], onDelete: SetNull)
+  respondedByRole           PlatformRole?
+  respondedAt               DateTime?                    @db.Timestamptz(6)
+  rejectionReason           String?
+  collectedByUserId         String?                      @db.Uuid
+  collectedBy               User?                        @relation("ReturnPickupCollectedBy", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  collectedByRole           PlatformRole?
+  collectedAt               DateTime?                    @db.Timestamptz(6)
+  collectionNote            String?
+  createdAt                 DateTime                     @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                     @updatedAt @db.Timestamptz(6)
+
+  @@index([productOrderId])
+  @@index([distributorOrganisationId, status])
+  @@index([deliveryPartnerUserId, status])
+  @@index([status, assignedAt])
+}
+
+model ReturnInspectionDisposition {
+  id                  String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  returnRequestId     String                      @db.Uuid
+  returnRequest       ReturnRequest               @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  returnRequestItemId String                      @db.Uuid
+  returnRequestItem   ReturnRequestItem           @relation(fields: [returnRequestItemId], references: [id], onDelete: Restrict)
+  reservationId       String                      @db.Uuid
+  reservation         ProductOrderItemReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  batchId             String                      @db.Uuid
+  batch               InventoryBatch              @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  outcome             ReturnInspectionOutcome
+  quantity            Int
+  inventoryMovementId String?                     @unique @db.Uuid
+  inventoryMovement   InventoryMovement?          @relation(fields: [inventoryMovementId], references: [id], onDelete: Restrict)
+  inspectedByUserId   String?                     @db.Uuid
+  inspectedByUser     User?                       @relation("ReturnInspectionDispositionInspectedBy", fields: [inspectedByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime                    @default(now()) @db.Timestamptz(6)
+
+  @@unique([returnRequestId, returnRequestItemId, reservationId, outcome])
+  @@index([returnRequestId, createdAt])
+  @@index([returnRequestItemId])
+  @@index([reservationId])
+  @@index([batchId, outcome])
+  @@index([inspectedByUserId, createdAt])
+}
+
+model ReturnRequestStatusHistory {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  returnRequestId String               @db.Uuid
+  returnRequest   ReturnRequest        @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  fromStatus      ReturnRequestStatus?
+  toStatus        ReturnRequestStatus
+  actorUserId     String?              @db.Uuid
+  actorUser       User?                @relation("ReturnRequestStatusChangedBy", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorRole       PlatformRole?
+  reason          String?
+  requestId       String?
+  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
+
+  @@index([returnRequestId, createdAt])
+  @@index([toStatus, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model ReturnRequestEvidence {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  returnRequestId  String        @db.Uuid
+  returnRequest    ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  storedFileId     String        @unique @db.Uuid
+  storedFile       StoredFile    @relation("ReturnEvidenceStoredFile", fields: [storedFileId], references: [id], onDelete: Restrict)
+  uploadedByUserId String        @db.Uuid
+  uploadedBy       User          @relation("ReturnRequestEvidenceUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  uploadedByRole   PlatformRole
+  caption          String?
+  createdAt        DateTime      @default(now()) @db.Timestamptz(6)
+
+  @@index([returnRequestId, createdAt])
+  @@index([uploadedByUserId, createdAt])
+}
+
+model Dispute {
+  id                        String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId            String                    @db.Uuid
+  productOrder              ProductOrder              @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  returnRequestId           String?                   @db.Uuid
+  returnRequest             ReturnRequest?            @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  farmerUserId              String                    @db.Uuid
+  farmerUser                User                      @relation("DisputeFarmerUser", fields: [farmerUserId], references: [id], onDelete: Restrict)
+  distributorOrganisationId String                    @db.Uuid
+  distributorOrganisation   Organisation              @relation("DisputeDistributorOrganisation", fields: [distributorOrganisationId], references: [id], onDelete: Restrict)
+  raisedByUserId            String                    @db.Uuid
+  raisedBy                  User                      @relation("DisputeRaisedBy", fields: [raisedByUserId], references: [id], onDelete: Restrict)
+  raisedByRole              PlatformRole
+  againstOrganisationId     String?                   @db.Uuid
+  againstOrganisation       Organisation?             @relation("DisputeAgainstOrganisation", fields: [againstOrganisationId], references: [id], onDelete: Restrict)
+  status                    DisputeStatus             @default(OPEN)
+  category                  DisputeCategory
+  description               String
+  orderStatusBeforeDispute  ProductOrderStatus
+  assignedToUserId          String?                   @db.Uuid
+  assignedTo                User?                     @relation("DisputeAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  resolutionOutcome         DisputeResolutionOutcome?
+  resolutionNote            String?
+  resolutionAmountPaise     Int?
+  resolvedAt                DateTime?                 @db.Timestamptz(6)
+  closedAt                  DateTime?                 @db.Timestamptz(6)
+  idempotencyKey            String
+  requestHash               String
+  events                    DisputeEvent[]
+  ledgerEntries             FinancialLedgerEntry[]
+  createdAt                 DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                  @updatedAt @db.Timestamptz(6)
+
+  @@unique([raisedByUserId, idempotencyKey])
+  @@index([farmerUserId, status])
+  @@index([distributorOrganisationId, status])
+  @@index([assignedToUserId, status])
+  @@index([status, createdAt])
+  @@index([returnRequestId])
+}
+
+model DisputeEvent {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  disputeId      String           @db.Uuid
+  dispute        Dispute          @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+  eventType      DisputeEventType
+  fromStatus     DisputeStatus?
+  toStatus       DisputeStatus
+  actorUserId    String           @db.Uuid
+  actorUser      User             @relation("DisputeEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  actorRole      PlatformRole
+  note           String?
+  requestId      String?
+  idempotencyKey String?
+  createdAt      DateTime         @default(now()) @db.Timestamptz(6)
+
+  @@unique([actorUserId, idempotencyKey])
+  @@index([disputeId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
 model PaymentIntent {
-  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  checkoutId             String                 @db.Uuid
-  checkout               ProductCheckout        @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
-  farmerProfileId        String                 @db.Uuid
-  farmerProfile          FarmerProfile          @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
-  providerMode           PaymentProviderMode    @default(MOCK)
-  providerReference      String                 @unique
-  status                 PaymentIntentStatus    @default(PENDING)
-  amountPaise            Int
-  currency               String                 @default("INR")
-  failureCode            String?
-  failureMessage         String?
-  events                 PaymentEvent[]
-  financialLedgerEntries FinancialLedgerEntry[]
-  createdAt              DateTime               @default(now()) @db.Timestamptz(6)
-  updatedAt              DateTime               @updatedAt @db.Timestamptz(6)
+  id                       String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  checkoutId               String                 @db.Uuid
+  checkout                 ProductCheckout        @relation(fields: [checkoutId], references: [id], onDelete: Restrict)
+  farmerProfileId          String                 @db.Uuid
+  farmerProfile            FarmerProfile          @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  providerMode             PaymentProviderMode    @default(MOCK)
+  providerReference        String                 @unique
+  status                   PaymentIntentStatus    @default(PENDING)
+  amountPaise              Int
+  currency                 String                 @default("INR")
+  /// The provider's own identifier for the captured payment, as opposed to
+  /// `providerReference`, which identifies the intent/order we created. Only a
+  /// verified webhook or a server-side status fetch may set it.
+  providerPaymentReference String?                @unique
+  /// The provider's raw status word at the last direct fetch, kept verbatim so
+  /// a reconciliation report can show what the provider actually said rather
+  /// than only our normalisation of it.
+  providerStatus           String?
+  lastProviderSyncAt       DateTime?              @db.Timestamptz(6)
+  failureCode              String?
+  failureMessage           String?
+  events                   PaymentEvent[]
+  webhookEvents            WebhookEvent[]
+  financialLedgerEntries   FinancialLedgerEntry[]
+  refunds                  Refund[]
+  createdAt                DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime               @updatedAt @db.Timestamptz(6)
 
   @@index([checkoutId, status])
   @@index([farmerProfileId, createdAt])
   @@index([providerMode, status])
+}
+
+model Refund {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productOrderId          String                 @db.Uuid
+  productOrder            ProductOrder           @relation(fields: [productOrderId], references: [id], onDelete: Restrict)
+  returnRequestId         String?                @unique @db.Uuid
+  returnRequest           ReturnRequest?         @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  paymentIntentId         String?                @db.Uuid
+  paymentIntent           PaymentIntent?         @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  farmerUserId            String                 @db.Uuid
+  farmerUser              User                   @relation("RefundFarmerUser", fields: [farmerUserId], references: [id], onDelete: Restrict)
+  amountPaise             Int
+  method                  RefundMethod
+  status                  RefundStatus           @default(PENDING)
+  providerRefundReference String?                @unique
+  providerMode            PaymentProviderMode
+  failureReason           String?
+  idempotencyKey          String                 @unique
+  initiatedByUserId       String                 @db.Uuid
+  initiatedBy             User                   @relation("RefundInitiatedBy", fields: [initiatedByUserId], references: [id], onDelete: Restrict)
+  initiatedAt             DateTime               @default(now()) @db.Timestamptz(6)
+  completedAt             DateTime?              @db.Timestamptz(6)
+  events                  RefundEvent[]
+  financialLedgerEntries  FinancialLedgerEntry[]
+  creditNote              CreditNote?
+  createdAt               DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime               @updatedAt @db.Timestamptz(6)
+
+  @@index([productOrderId, createdAt])
+  @@index([farmerUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([paymentIntentId])
+}
+
+model RefundEvent {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  refundId          String          @db.Uuid
+  refund            Refund          @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  eventType         RefundEventType
+  status            RefundStatus
+  providerReference String?
+  payload           Json?
+  actorUserId       String?         @db.Uuid
+  actorUser         User?           @relation("RefundEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorRole         PlatformRole?
+  requestId         String?
+  idempotencyKey    String?         @unique
+  requestHash       String?
+  createdAt         DateTime        @default(now()) @db.Timestamptz(6)
+
+  @@index([refundId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([providerReference])
 }
 
 model PaymentEvent {
@@ -1035,6 +2359,45 @@ model PaymentEvent {
   @@index([eventType, createdAt])
   @@index([actorUserId, createdAt])
   @@index([providerReference])
+}
+
+/// Every webhook the platform has accepted from a payment provider, stored raw.
+///
+/// The row is written inside the HTTP request, immediately after signature
+/// verification and before any interpretation, so that a payload we could not
+/// parse is still evidence rather than a lost delivery. Providers redeliver
+/// freely, so `(provider, providerEventId)` is unique and a duplicate is
+/// resolved by the insert failing rather than by a read-then-write race.
+///
+/// `payloadDigest` is a SHA-256 of the raw body. A redelivery whose digest
+/// differs from the one already stored for that event id means the provider
+/// changed its mind about an event it had already sent, which is worth an
+/// operator's attention rather than a silent overwrite.
+model WebhookEvent {
+  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        String
+  providerEventId String
+  eventType       String
+  /// Verbatim request body. Kept as text, not parsed JSON: signature
+  /// verification is byte-exact, and a re-serialised payload could not be
+  /// re-verified later during a dispute.
+  rawPayload      String
+  payloadDigest   String
+  signature       String
+  paymentIntentId String?                 @db.Uuid
+  paymentIntent   PaymentIntent?          @relation(fields: [paymentIntentId], references: [id], onDelete: Restrict)
+  status          WebhookProcessingStatus @default(RECEIVED)
+  attemptCount    Int                     @default(0)
+  failureReason   String?
+  requestId       String?
+  receivedAt      DateTime                @default(now()) @db.Timestamptz(6)
+  processedAt     DateTime?               @db.Timestamptz(6)
+  createdAt       DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime                @updatedAt @db.Timestamptz(6)
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+  @@index([paymentIntentId, receivedAt])
 }
 
 model OrganisationMembership {
@@ -1182,12 +2545,14 @@ model CommissionEntry {
 
 enum FinancialLedgerEntryType {
   FARMER_PAYMENT
+  CLUB_BENEFIT_SUBSIDY
   MARKETPLACE_COMMISSION
   DISTRIBUTOR_PAYABLE
   PROMOTER_COMMISSION
   DELIVERY_FEE
   REFUND
   SETTLEMENT
+  ADJUSTMENT
 }
 
 model FinancialLedgerEntry {
@@ -1204,6 +2569,10 @@ model FinancialLedgerEntry {
   commissionEntry   CommissionEntry?         @relation(fields: [commissionEntryId], references: [id], onDelete: SetNull)
   settlementId      String?                  @db.Uuid
   settlement        Settlement?              @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  refundId          String?                  @db.Uuid
+  refund            Refund?                  @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  disputeId         String?                  @db.Uuid
+  dispute           Dispute?                 @relation(fields: [disputeId], references: [id], onDelete: SetNull)
   requestId         String?
   reason            String?
   createdAt         DateTime                 @default(now()) @db.Timestamptz(6)
@@ -1214,6 +2583,8 @@ model FinancialLedgerEntry {
   @@index([paymentIntentId])
   @@index([commissionEntryId])
   @@index([settlementId])
+  @@index([refundId])
+  @@index([disputeId])
 }
 
 enum SettlementStatus {
@@ -1245,21 +2616,22 @@ enum PromoterAttributionStatus {
 }
 
 model PromoterAttribution {
-  id                     String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  promoterUserId         String                    @db.Uuid
-  promoterUser           User                      @relation("PromoterAttributionPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
-  promoterOrganisationId String                    @db.Uuid
-  promoterOrganisation   Organisation              @relation("PromoterAttributionOrganisation", fields: [promoterOrganisationId], references: [id], onDelete: Restrict)
-  farmerProfileId        String                    @db.Uuid
-  farmerProfile          FarmerProfile             @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
-  status                 PromoterAttributionStatus @default(ACTIVE)
-  assignedAt             DateTime                  @default(now()) @db.Timestamptz(6)
-  revokedAt              DateTime?                 @db.Timestamptz(6)
-  createdByUserId        String?                   @db.Uuid
-  createdBy              User?                     @relation("PromoterAttributionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  id                     String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  promoterUserId         String                       @db.Uuid
+  promoterUser           User                         @relation("PromoterAttributionPromoter", fields: [promoterUserId], references: [id], onDelete: Restrict)
+  promoterOrganisationId String                       @db.Uuid
+  promoterOrganisation   Organisation                 @relation("PromoterAttributionOrganisation", fields: [promoterOrganisationId], references: [id], onDelete: Restrict)
+  farmerProfileId        String                       @db.Uuid
+  farmerProfile          FarmerProfile                @relation(fields: [farmerProfileId], references: [id], onDelete: Restrict)
+  status                 PromoterAttributionStatus    @default(ACTIVE)
+  assignedAt             DateTime                     @default(now()) @db.Timestamptz(6)
+  revokedAt              DateTime?                    @db.Timestamptz(6)
+  createdByUserId        String?                      @db.Uuid
+  createdBy              User?                        @relation("PromoterAttributionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   createdByRole          PlatformRole?
   reason                 String?
-  createdAt              DateTime                  @default(now()) @db.Timestamptz(6)
+  createdAt              DateTime                     @default(now()) @db.Timestamptz(6)
+  kisanClubAssignment    KisanClubPromoterAssignment?
 
   @@index([farmerProfileId, status])
   @@index([promoterUserId, status])
@@ -1356,7 +2728,10 @@ model SupportTicketEvidence {
   supportTicketId  String        @db.Uuid
   supportTicket    SupportTicket @relation(fields: [supportTicketId], references: [id], onDelete: Cascade)
   fileName         String
+  /// See the note on KycDocument.storageKey.
   storageKey       String
+  storedFileId     String?       @db.Uuid
+  storedFile       StoredFile?   @relation("SupportEvidenceStoredFile", fields: [storedFileId], references: [id], onDelete: Restrict)
   uploadedByUserId String        @db.Uuid
   uploadedBy       User          @relation("SupportTicketEvidenceUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
   uploadedByRole   PlatformRole
@@ -1441,30 +2816,30 @@ enum NotificationStatus {
 }
 
 model Notification {
-  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  recipientUserId       String                @db.Uuid
-  recipient             User                  @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
-  channel               NotificationChannel
-  category              String
-  title                 String
-  body                  String
-  payloadSnapshot       Json?
-  status                NotificationStatus    @default(PENDING)
-  attemptCount          Int                   @default(0)
-  lastAttemptAt         DateTime?             @db.Timestamptz(6)
-  lastErrorCode         String?
-  lastErrorMessage      String?
-  providerReferenceId   String?
-  readAt                DateTime?             @db.Timestamptz(6)
-  relatedResourceType   String?
-  relatedResourceId     String?               @db.Uuid
-  triggeredByUserId     String?               @db.Uuid
-  triggeredBy           User?                 @relation("NotificationTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
-  triggeredByRole       PlatformRole?
-  reason                String?
-  attempts              NotificationAttempt[]
-  createdAt             DateTime              @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime              @updatedAt @db.Timestamptz(6)
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  recipientUserId     String                @db.Uuid
+  recipient           User                  @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  channel             NotificationChannel
+  category            String
+  title               String
+  body                String
+  payloadSnapshot     Json?
+  status              NotificationStatus    @default(PENDING)
+  attemptCount        Int                   @default(0)
+  lastAttemptAt       DateTime?             @db.Timestamptz(6)
+  lastErrorCode       String?
+  lastErrorMessage    String?
+  providerReferenceId String?
+  readAt              DateTime?             @db.Timestamptz(6)
+  relatedResourceType String?
+  relatedResourceId   String?               @db.Uuid
+  triggeredByUserId   String?               @db.Uuid
+  triggeredBy         User?                 @relation("NotificationTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  triggeredByRole     PlatformRole?
+  reason              String?
+  attempts            NotificationAttempt[]
+  createdAt           DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime              @updatedAt @db.Timestamptz(6)
 
   @@index([recipientUserId, status])
   @@index([recipientUserId, readAt])
@@ -1472,17 +2847,104 @@ model Notification {
 }
 
 model NotificationAttempt {
-  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  notificationId    String              @db.Uuid
-  notification      Notification        @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  notificationId    String             @db.Uuid
+  notification      Notification       @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   attemptNumber     Int
   outcome           NotificationStatus
   errorCode         String?
   errorMessage      String?
-  performedByUserId String?             @db.Uuid
-  performedBy       User?               @relation("NotificationAttemptPerformedBy", fields: [performedByUserId], references: [id], onDelete: SetNull)
+  performedByUserId String?            @db.Uuid
+  performedBy       User?              @relation("NotificationAttemptPerformedBy", fields: [performedByUserId], references: [id], onDelete: SetNull)
   performedByRole   PlatformRole?
-  createdAt         DateTime            @default(now()) @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(6)
 
   @@index([notificationId])
+}
+
+enum StoredFilePurpose {
+  KYC_DOCUMENT
+  PRODUCT_IMAGE
+  PRODUCT_DOCUMENT
+  DELIVERY_PROOF
+  RETURN_EVIDENCE
+  SUPPORT_EVIDENCE
+  VISIT_EVIDENCE
+  INVOICE_PDF
+  CREDIT_NOTE_PDF
+  SERVICE_EVIDENCE
+}
+
+enum StoredFileStatus {
+  PENDING_UPLOAD
+  PENDING_SCAN
+  AVAILABLE
+  INFECTED
+  REJECTED
+  DELETED
+}
+
+enum StoredFileScanResult {
+  CLEAN
+  INFECTED
+  SCAN_FAILED
+}
+
+/// Every file the platform holds. Bytes live in object storage; this row is the
+/// authoritative record of what the object is, who owns it and whether it may be
+/// downloaded. A file is only readable once scanning has cleared it.
+model StoredFile {
+  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerUserId          String                  @db.Uuid
+  ownerUser            User                    @relation("StoredFileOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  organisationId       String?                 @db.Uuid
+  organisation         Organisation?           @relation("StoredFileOrganisation", fields: [organisationId], references: [id], onDelete: Restrict)
+  purpose              StoredFilePurpose
+  status               StoredFileStatus        @default(PENDING_UPLOAD)
+  objectKey            String                  @unique
+  originalFilename     String
+  contentType          String
+  /// Size the client promised when requesting the upload URL. Kept alongside the
+  /// observed size so a client that lies can be detected on confirm.
+  declaredSizeBytes    Int
+  sizeBytes            Int?
+  checksumSha256       String?
+  scanResult           StoredFileScanResult?
+  scanCompletedAt      DateTime?               @db.Timestamptz(6)
+  rejectionReason      String?
+  uploadedAt           DateTime?               @db.Timestamptz(6)
+  uploadUrlExpiresAt   DateTime                @db.Timestamptz(6)
+  kycDocuments         KycDocument[]           @relation("KycDocumentStoredFile")
+  supportEvidence      SupportTicketEvidence[] @relation("SupportEvidenceStoredFile")
+  returnEvidence       ReturnRequestEvidence[] @relation("ReturnEvidenceStoredFile")
+  productPrimaryImages MasterProduct[]         @relation("ProductPrimaryImage")
+  invoiceDocument      ProductInvoiceDocument?
+  creditNoteDocument   CreditNoteDocument?
+  createdAt            DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime                @updatedAt @db.Timestamptz(6)
+
+  @@index([ownerUserId, purpose])
+  @@index([organisationId, purpose])
+  @@index([status, createdAt])
+}
+
+/// Whether a recipient wants a given category on a given channel.
+///
+/// Absence means "use the default for that category". Only categories the
+/// platform classes as non-transactional can be disabled; the service rejects an
+/// attempt to switch off an order, payment, refund or security message, because
+/// those are the record of a transaction the recipient is party to rather than
+/// marketing.
+model NotificationPreference {
+  id        String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String              @db.Uuid
+  user      User                @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+  category  String
+  channel   NotificationChannel
+  enabled   Boolean
+  createdAt DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime            @updatedAt @db.Timestamptz(6)
+
+  @@unique([userId, category, channel])
+  @@index([userId])
 }

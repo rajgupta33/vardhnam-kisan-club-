@@ -61,6 +61,11 @@ export class UpdateFarmerAddressDto {
   @MaxLength(80)
   state?: string;
 
+  @ApiPropertyOptional({ example: '08' })
+  @IsOptional()
+  @Matches(/^[0-9]{2}$/)
+  stateCode?: string;
+
   @ApiPropertyOptional({ example: '302001' })
   @IsOptional()
   @Matches(/^[1-9][0-9]{5}$/)

@@ -1,35 +1,22 @@
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { ApiExceptionFilter } from './common/filters/api-exception.filter';
-import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
+import { configureApp } from './bootstrap';
+import { installShutdownHandlers } from './common/shutdown';
 import { JsonLoggerService } from './common/logger/json-logger.service';
-import { correlationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { validateEnv } from './config/env.schema';
 
 async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env);
   const logger = new JsonLoggerService(env.LOG_LEVEL);
-  const app = await NestFactory.create(AppModule, { logger });
+  // `rawBody` keeps the verbatim request bytes on `request.rawBody`. Payment
+  // webhook signatures are computed over those exact bytes, and a re-serialised
+  // body reorders keys and changes whitespace, so a signature checked against
+  // the parsed object would never match.
+  const app = await NestFactory.create(AppModule, { logger, rawBody: true });
 
-  app.enableCors({
-    origin: env.CORS_ORIGIN,
-    credentials: true,
-  });
-
-  app.use(correlationIdMiddleware);
-  app.setGlobalPrefix(env.API_PREFIX);
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
-  app.useGlobalFilters(new ApiExceptionFilter());
-  app.useGlobalInterceptors(new ResponseEnvelopeInterceptor());
+  configureApp(app, env);
 
   if (env.NODE_ENV !== 'production') {
     const openApiConfig = new DocumentBuilder()
@@ -43,6 +30,12 @@ async function bootstrap(): Promise<void> {
     const document = SwaggerModule.createDocument(app, openApiConfig);
     SwaggerModule.setup('api/docs', app, document);
   }
+
+  // Stops accepting connections, waits for in-flight work and runs every
+  // shutdown hook, so a rolling deploy neither drops requests nor leaves Prisma
+  // and Redis connections behind. Deliberately *instead of*
+  // `app.enableShutdownHooks()` -- see `installShutdownHandlers`.
+  installShutdownHandlers(app, logger, 'Bootstrap');
 
   await app.listen(env.PORT);
   logger.log(`Marketplace API listening on port ${env.PORT}`, 'Bootstrap');

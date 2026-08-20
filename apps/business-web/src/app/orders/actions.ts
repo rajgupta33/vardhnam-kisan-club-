@@ -12,14 +12,17 @@ import {
   acceptFulfilmentOrder,
   assignFulfilmentOrderDelivery,
   completeFulfilmentOrderDelivery,
+  downloadFulfilmentInvoicePdf,
   formatApiError,
   generateProductInvoice,
   markFulfilmentOrderOutForDelivery,
   markFulfilmentOrderReadyToPack,
   markFulfilmentOrderReadyForPickup,
   packFulfilmentOrder,
+  requestFulfilmentInvoicePdf,
   rejectFulfilmentOrder,
 } from '../../lib/marketplace-api';
+import { requireHttpDownloadUrl } from '../../lib/document-download';
 
 export async function acceptOrderAction(formData: FormData): Promise<void> {
   const orderId = requireFormValue(formData, 'orderId');
@@ -100,6 +103,29 @@ export async function generateInvoiceAction(formData: FormData): Promise<void> {
   }
 }
 
+export async function requestInvoicePdfAction(formData: FormData): Promise<void> {
+  const orderId = requireFormValue(formData, 'orderId');
+  try {
+    await requestFulfilmentInvoicePdf(orderId);
+  } catch (error) {
+    redirectWithOrderMessage(orderId, 'error', formatApiError(error));
+  }
+  revalidateOrderPaths(orderId);
+  redirectWithOrderMessage(orderId, 'notice', 'Invoice PDF requested');
+}
+
+export async function downloadInvoicePdfAction(formData: FormData): Promise<void> {
+  const orderId = requireFormValue(formData, 'orderId');
+  let downloadUrl: string;
+  try {
+    const download = await downloadFulfilmentInvoicePdf(orderId);
+    downloadUrl = requireHttpDownloadUrl(download.downloadUrl);
+  } catch (error) {
+    redirectWithOrderMessage(orderId, 'error', formatApiError(error));
+  }
+  redirect(downloadUrl);
+}
+
 export async function markReadyForPickupAction(formData: FormData): Promise<void> {
   const orderId = requireFormValue(formData, 'orderId');
   const reason = optionalFormValue(formData, 'reason');
@@ -161,6 +187,7 @@ export async function completeDeliveryAction(formData: FormData): Promise<void> 
   const proofNote = optionalFormValue(formData, 'proofNote');
   const input: CompleteDeliveryInput = {
     otpCode,
+    proofLocationStatus: 'UNAVAILABLE',
     ...(proofNote ? { proofNote } : {}),
   };
 

@@ -1,0 +1,52 @@
+# Build context hygiene. Everything here either bloats the context, breaks the
+# build by shadowing a platform-specific install, or must never reach an image.
+
+# Never: local secrets. The image takes configuration from the environment.
+.env
+.env.*
+!.env.example
+
+# Installed per-platform inside the image; a host copy would shadow it and ship
+# the wrong Prisma engine binaries.
+node_modules
+**/node_modules
+
+# Build output, regenerated in the image.
+dist
+build
+.next
+**/dist
+**/.next
+apps/farmer-mobile/build
+apps/partner-mobile/build
+.dart_tool
+**/.dart_tool
+
+# Local runtime state.
+.storage
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# Not needed to build or run the API.
+.git
+.github
+docs
+artifacts
+infrastructure
+scripts
+apps/business-web
+apps/farmer-mobile
+apps/partner-mobile
+**/*.md
+**/*.docx
+**/*.pdf
+**/*.png
+"product sku"
+
+# Test and tooling config that the runtime image has no use for.
+**/test
+**/*.spec.ts
+**/jest*.config.cjs
+.vscode
+.idea

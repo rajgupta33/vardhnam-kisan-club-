@@ -10,6 +10,7 @@ import { PermissionCode } from '../access/permission-codes';
 import { AuditService, type AuditRecordInput } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
+import { stateCodeForAddress } from '../common/india-gst';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFarmerAddressDto } from './dto/create-farmer-address.dto';
 import type { UpdateFarmerAddressDto } from './dto/update-farmer-address.dto';
@@ -159,7 +160,7 @@ export class FarmersService {
 
       const updated = await tx.farmerAddress.update({
         where: { id: addressId },
-        data: this.addressUpdateFields(dto),
+        data: this.addressUpdateFields(dto, existing),
       });
 
       const auditInput = this.withActor(actor, {
@@ -215,6 +216,7 @@ export class FarmersService {
   private addressCreateFields(
     dto: CreateFarmerAddressDto,
   ): Omit<Prisma.FarmerAddressUncheckedCreateInput, 'farmerProfileId'> {
+    const stateCode = this.requireAddressStateCode(dto.state, dto.stateCode);
     return {
       label: dto.label,
       recipientName: dto.recipientName,
@@ -225,13 +227,17 @@ export class FarmersService {
       city: dto.city,
       district: dto.district ?? null,
       state: dto.state,
+      stateCode,
       pincode: dto.pincode,
       landmark: dto.landmark ?? null,
       isDefault: dto.isDefault ?? false,
     };
   }
 
-  private addressUpdateFields(dto: UpdateFarmerAddressDto): Prisma.FarmerAddressUpdateInput {
+  private addressUpdateFields(
+    dto: UpdateFarmerAddressDto,
+    existing: FarmerAddress,
+  ): Prisma.FarmerAddressUpdateInput {
     const data: Prisma.FarmerAddressUpdateInput = {};
     if (dto.label !== undefined) {
       data.label = dto.label;
@@ -260,6 +266,12 @@ export class FarmersService {
     if (dto.state !== undefined) {
       data.state = dto.state;
     }
+    if (dto.state !== undefined || dto.stateCode !== undefined) {
+      data.stateCode = this.requireAddressStateCode(
+        dto.state ?? existing.state,
+        dto.stateCode ?? undefined,
+      );
+    }
     if (dto.pincode !== undefined) {
       data.pincode = dto.pincode;
     }
@@ -271,6 +283,17 @@ export class FarmersService {
     }
 
     return data;
+  }
+
+  private requireAddressStateCode(state: string, supplied?: string): string {
+    const stateCode = stateCodeForAddress(state, supplied);
+    if (!stateCode) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Address state and GST state code are missing or inconsistent',
+      });
+    }
+    return stateCode;
   }
 
   private async findProfileForActorOrThrow(actor: CurrentUser): Promise<FarmerProfile> {
@@ -349,6 +372,7 @@ export class FarmersService {
       city: address.city,
       district: address.district,
       state: address.state,
+      stateCode: address.stateCode,
       pincode: address.pincode,
       landmark: address.landmark,
       isDefault: address.isDefault,

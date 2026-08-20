@@ -45,12 +45,17 @@ describe('Phase 1D production authentication (AUTH_MODE=production)', () => {
     farmerPhone = `+9190${Math.floor(10000000 + Math.random() * 89999999)}`;
     companyEmail = `phase1d-company-${suffix}@example.local`;
 
-    const farmerOrganisation = await prisma.organisation.create({
-      data: {
+    const farmerOrganisation = await prisma.organisation.upsert({
+      where: { slug: 'vardhnam-farmer-context' },
+      create: {
         type: OrganisationType.VARDHNAM,
-        slug: `phase1d-farmer-context-${suffix}`,
+        slug: 'vardhnam-farmer-context',
         legalName: 'Phase 1D Farmer Context',
         displayName: 'Phase 1D Farmer Context',
+        status: OrganisationStatus.ACTIVE,
+      },
+      update: {
+        type: OrganisationType.VARDHNAM,
         status: OrganisationStatus.ACTIVE,
       },
     });
@@ -155,6 +160,186 @@ describe('Phase 1D production authentication (AUTH_MODE=production)', () => {
     expect(meResponse.body.data.fullName).toBe('Phase 1D Farmer');
 
     await request(server).get('/api/v1/farmers/me').expect(401);
+  });
+
+  it('self-registers a new farmer only through the explicit farmer OTP flow', async () => {
+    const server = requireServer();
+    const phone = `+9191${Math.floor(10000000 + Math.random() * 89999999)}`;
+
+    const requestResponse = await request(server)
+      .post('/api/v1/auth/farmer/otp/request')
+      .send({ phone })
+      .expect(200);
+    const otpCode = requestResponse.body.data.mockOtpCode as string;
+
+    const verifyResponse = await request(server)
+      .post('/api/v1/auth/farmer/otp/verify')
+      .send({
+        phone,
+        code: otpCode,
+        fullName: 'New Farmer',
+        preferredLocale: 'hi-IN',
+      })
+      .expect(200);
+
+    expect(verifyResponse.body.data.role).toBe(PlatformRole.FARMER);
+    expect(verifyResponse.body.data.accessToken).toEqual(expect.any(String));
+    expect(verifyResponse.body.data.refreshToken).toEqual(expect.any(String));
+
+    const meResponse = await request(server)
+      .get('/api/v1/farmers/me')
+      .set('Authorization', `Bearer ${verifyResponse.body.data.accessToken as string}`)
+      .expect(200);
+    expect(meResponse.body.data).toMatchObject({
+      fullName: 'New Farmer',
+      preferredLocale: 'hi-IN',
+    });
+
+    const user = await prisma.user.findUnique({
+      where: { phone },
+      include: { memberships: true, farmerProfile: true },
+    });
+    if (!user) {
+      throw new Error('Expected the verified farmer to be persisted');
+    }
+    expect(user.farmerProfile?.fullName).toBe('New Farmer');
+    expect(
+      user.memberships.filter((membership) => membership.role === PlatformRole.FARMER),
+    ).toHaveLength(1);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          actorUserId: user.id,
+          action: {
+            in: [
+              'USER_CREATED',
+              'FARMER_PROFILE_CREATED',
+              'ORGANISATION_MEMBERSHIP_CREATED',
+              'AUTH_FARMER_OTP_VERIFIED',
+            ],
+          },
+        },
+      }),
+    ).toBe(4);
+  });
+
+  it('binds farmer membership selection to the farmer-only OTP candidates', async () => {
+    const server = requireServer();
+    const suffix = randomUUID();
+    const phone = `+9189${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const [firstFarmerContext, secondFarmerContext, companyContext] = await Promise.all([
+      prisma.organisation.create({
+        data: {
+          type: OrganisationType.VARDHNAM,
+          slug: `farmer-selection-a-${suffix}`,
+          legalName: 'Farmer Selection Context A',
+          displayName: 'Jaipur Farmer Group',
+          status: OrganisationStatus.ACTIVE,
+        },
+      }),
+      prisma.organisation.create({
+        data: {
+          type: OrganisationType.VARDHNAM,
+          slug: `farmer-selection-b-${suffix}`,
+          legalName: 'Farmer Selection Context B',
+          displayName: 'Ajmer Farmer Group',
+          status: OrganisationStatus.ACTIVE,
+        },
+      }),
+      prisma.organisation.create({
+        data: {
+          type: OrganisationType.COMPANY,
+          slug: `farmer-selection-company-${suffix}`,
+          legalName: 'Hidden Company Context Private Limited',
+          displayName: 'Hidden Company Context',
+          status: OrganisationStatus.ACTIVE,
+        },
+      }),
+    ]);
+    const user = await prisma.user.create({
+      data: {
+        phone,
+        status: 'ACTIVE',
+        profile: { create: { displayName: 'Multi Context Farmer' } },
+        farmerProfile: {
+          create: { fullName: 'Multi Context Farmer', preferredLocale: 'en-IN' },
+        },
+      },
+    });
+    await prisma.organisationMembership.createMany({
+      data: [
+        {
+          userId: user.id,
+          organisationId: firstFarmerContext.id,
+          role: PlatformRole.FARMER,
+          status: MembershipStatus.ACTIVE,
+        },
+        {
+          userId: user.id,
+          organisationId: secondFarmerContext.id,
+          role: PlatformRole.FARMER,
+          status: MembershipStatus.ACTIVE,
+        },
+        {
+          userId: user.id,
+          organisationId: companyContext.id,
+          role: PlatformRole.COMPANY_OWNER,
+          status: MembershipStatus.ACTIVE,
+        },
+      ],
+    });
+
+    const otpResponse = await request(server)
+      .post('/api/v1/auth/farmer/otp/request')
+      .send({ phone })
+      .expect(200);
+    const verifyResponse = await request(server)
+      .post('/api/v1/auth/farmer/otp/verify')
+      .send({
+        phone,
+        code: otpResponse.body.data.mockOtpCode,
+        fullName: 'Multi Context Farmer',
+        preferredLocale: 'en-IN',
+      })
+      .expect(200);
+
+    expect(verifyResponse.body.data.membershipSelectionRequired).toBe(true);
+    expect(verifyResponse.body.data.candidates).toHaveLength(2);
+    expect(verifyResponse.body.data.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          organisationId: firstFarmerContext.id,
+          role: PlatformRole.FARMER,
+        }),
+        expect.objectContaining({
+          organisationId: secondFarmerContext.id,
+          role: PlatformRole.FARMER,
+        }),
+      ]),
+    );
+    expect(verifyResponse.body.data.candidates).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ organisationId: companyContext.id })]),
+    );
+
+    await request(server)
+      .post('/api/v1/auth/select-organisation')
+      .send({
+        selectionToken: verifyResponse.body.data.selectionToken,
+        organisationId: companyContext.id,
+      })
+      .expect(401);
+
+    const selectedResponse = await request(server)
+      .post('/api/v1/auth/select-organisation')
+      .send({
+        selectionToken: verifyResponse.body.data.selectionToken,
+        organisationId: secondFarmerContext.id,
+      })
+      .expect(200);
+    expect(selectedResponse.body.data).toMatchObject({
+      organisationId: secondFarmerContext.id,
+      role: PlatformRole.FARMER,
+    });
   });
 
   it('locks out OTP verification after too many wrong attempts', async () => {

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
+  IsBoolean,
   IsNumber,
   IsOptional,
   IsString,
@@ -43,6 +44,24 @@ export class CreateProductVariantDto {
   @Min(0)
   @Max(100000000)
   mrpPaise?: number;
+
+  @ApiPropertyOptional({ example: '1001', description: '4 to 8 digit HSN code.' })
+  @IsOptional()
+  @Matches(/^[0-9]{4,8}$/)
+  hsnCode?: string;
+
+  @ApiPropertyOptional({ example: 500, description: 'GST rate in basis points; 500 = 5%.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  gstRateBps?: number;
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 
   @ApiPropertyOptional({ example: 'Initial pack size.' })
   @IsOptional()

@@ -19,7 +19,7 @@ export async function reviewOfferAction(formData: FormData): Promise<void> {
   const offerId = requireFormValue(formData, 'offerId');
   const decision = requireFormValue(formData, 'decision') as OfferReviewDecision;
   const reason = optionalFormValue(formData, 'reason');
-  const { client, config } = createBusinessApiClient();
+  const { client, config } = await createBusinessApiClient();
 
   if (!client) {
     redirectWithOfferMessage(offerId, 'error', `Missing ${config.missingVariables.join(', ')}`);

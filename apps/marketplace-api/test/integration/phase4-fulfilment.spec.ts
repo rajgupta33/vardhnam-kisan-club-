@@ -3,7 +3,10 @@ import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
   CatalogueStatus,
+  CommissionRuleStatus,
+  DeliveryFailureReasonCode,
   DistributorOfferStatus,
+  DeliveryPartnerAvailabilityStatus,
   FulfilmentMode,
   InventoryMovementType,
   MembershipStatus,
@@ -106,10 +109,27 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     expect(invoice.sellerOrganisationId).toBe(seeded.distributorOrganisationId);
     expect(invoice.sellerLegalNameSnapshot).toBe('Phase 4 Jaipur Distributor Private Limited');
     expect(invoice.sellerGstinSnapshot).toBe('08ABCDE1234F1Z5');
+    expect(invoice.sellerStateCodeSnapshot).toBe('08');
+    expect(invoice.placeOfSupplyStateCode).toBe('08');
 
     // Business truth 20: totals are backend-derived, never client-supplied.
     expect(invoice.subtotalPaise).toBe(236000);
-    expect(invoice.totalPaise).toBe(invoice.subtotalPaise + invoice.taxPaise);
+    expect(invoice.taxableAmountPaise + invoice.taxPaise).toBe(invoice.subtotalPaise);
+    expect(invoice.totalPaise).toBe(invoice.subtotalPaise);
+    expect(invoice.cgstPaise + invoice.sgstPaise).toBe(invoice.taxPaise);
+    expect(invoice.igstPaise).toBe(0);
+    expect(invoice.sequenceNumber).toBe(1);
+    expect(invoice.invoiceNumber).toMatch(/^[A-F0-9]{4}\/[0-9]{2}\/000001$/);
+    expect(invoice.invoiceNumber.length).toBeLessThanOrEqual(16);
+    expect(invoice.lineItemsSnapshot).toEqual([
+      expect.objectContaining({
+        hsnCode: '1008',
+        gstRateBps: 500,
+        cgstPaise: expect.any(Number),
+        sgstPaise: expect.any(Number),
+        igstPaise: 0,
+      }),
+    ]);
 
     const replayInvoiceResponse = await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/invoice`)
@@ -144,6 +164,16 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     const otpCode = assignment.mockOtpCode as string;
     expect(otpCode).toMatch(/^[0-9]{6}$/);
 
+    const acceptedAssignmentResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Route and package accepted' })
+      .expect(201);
+    expect(acceptedAssignmentResponse.body.data.deliveryAssignment.status).toBe(
+      ProductDeliveryAssignmentStatus.ACCEPTED,
+    );
+    await issueAndVerifyPackagePickup(server, orderId);
+
     const outForDeliveryResponse = await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
       .set(seeded.deliveryPartnerHeaders)
@@ -151,16 +181,40 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
       .expect(201);
     expect(outForDeliveryResponse.body.data.status).toBe(ProductOrderStatus.OUT_FOR_DELIVERY);
 
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({
+        otpCode,
+        proofLocationStatus: 'DENIED',
+        proofLatitude: 27.559,
+      })
+      .expect(400);
+
     const deliveredResponse = await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.deliveryPartnerHeaders)
-      .send({ otpCode, proofNote: 'Handed to farmer at farm gate and OTP verified' })
+      .send({
+        otpCode,
+        proofNote: 'Handed to farmer at farm gate and OTP verified',
+        proofLocationStatus: 'GRANTED',
+        proofLatitude: 27.559,
+        proofLongitude: 78.663,
+        proofAccuracyMetres: 14.2,
+        proofLocationCapturedAt: new Date().toISOString(),
+      })
       .expect(201);
     expect(deliveredResponse.body.data.status).toBe(ProductOrderStatus.DELIVERED);
     expect(deliveredResponse.body.data.deliveryAssignment.status).toBe(
       ProductDeliveryAssignmentStatus.DELIVERED,
     );
     expect(deliveredResponse.body.data.deliveryAssignment.otpVerifiedAt).not.toBeNull();
+    expect(deliveredResponse.body.data.deliveryAssignment).toMatchObject({
+      proofLocationStatus: 'GRANTED',
+      proofLatitude: 27.559,
+      proofLongitude: 78.663,
+      proofAccuracyMetres: 14.2,
+    });
 
     // The delivered response must never leak the OTP back to the caller.
     expect(deliveredResponse.body.data.deliveryAssignment.mockOtpCode).toBeUndefined();
@@ -200,9 +254,105 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
         'PRODUCT_ORDER_ACCEPTED_BY_DISTRIBUTOR',
         'PRODUCT_INVOICE_GENERATED',
         'PRODUCT_DELIVERY_ASSIGNED',
+        'PRODUCT_DELIVERY_ASSIGNMENT_ACCEPTED',
         'PRODUCT_ORDER_OUT_FOR_DELIVERY',
         'PRODUCT_ORDER_DELIVERED',
       ]),
+    );
+  });
+
+  it('records a structured failed delivery and starts only a due retry with a fresh OTP', async () => {
+    const server = requireServer();
+    const orderId = await createDispatchedOrder(server, 'delivery-failure-retry');
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment`)
+      .set(seeded.operationsHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.deliveryPartnerUserId,
+        reason: 'Assigned for failure and retry coverage',
+      })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Accepted route' })
+      .expect(201);
+    await issueAndVerifyPackagePickup(server, orderId);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'First attempt started' })
+      .expect(201);
+
+    const retryAt = new Date(Date.now() + 60 * 60 * 1000);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-failure`)
+      .set(seeded.otherDeliveryPartnerHeaders)
+      .send({
+        reasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+        note: 'Wrong partner must not update this assignment',
+        retryAt: retryAt.toISOString(),
+      })
+      .expect(403);
+
+    const failedResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-failure`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({
+        reasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+        note: 'Farmer requested another attempt',
+        retryAt: retryAt.toISOString(),
+      })
+      .expect(201);
+    expect(failedResponse.body.data.status).toBe(ProductOrderStatus.DELIVERY_FAILED);
+    expect(failedResponse.body.data.deliveryAssignment).toMatchObject({
+      status: ProductDeliveryAssignmentStatus.DELIVERY_FAILED,
+      failureAttemptCount: 1,
+      lastFailureReasonCode: DeliveryFailureReasonCode.FARMER_UNAVAILABLE,
+      lastFailureNote: 'Farmer requested another attempt',
+    });
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-retry`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Must wait for scheduled time' })
+      .expect(409);
+
+    await prisma.productDeliveryAssignment.update({
+      where: { productOrderId: orderId },
+      data: { retryScheduledAt: new Date(Date.now() - 1_000) },
+    });
+    const retryResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-retry`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Scheduled second attempt started' })
+      .expect(201);
+    expect(retryResponse.body.data.status).toBe(ProductOrderStatus.OUT_FOR_DELIVERY);
+    expect(retryResponse.body.data.deliveryAssignment).toMatchObject({
+      status: ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+      failureAttemptCount: 1,
+      mockOtpCode: expect.stringMatching(/^[0-9]{6}$/),
+    });
+    expect(
+      (retryResponse.body.data.statusHistory as Array<{ toStatus: ProductOrderStatus }>).map(
+        (entry) => entry.toStatus,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        ProductOrderStatus.DELIVERY_FAILED,
+        ProductOrderStatus.OUT_FOR_DELIVERY,
+      ]),
+    );
+
+    const auditActions = await prisma.auditLog.findMany({
+      where: {
+        resourceType: 'ProductDeliveryAssignment',
+        resourceId: retryResponse.body.data.deliveryAssignment.id as string,
+      },
+      select: { action: true },
+    });
+    expect(auditActions.map((item) => item.action)).toEqual(
+      expect.arrayContaining(['PRODUCT_DELIVERY_FAILED', 'PRODUCT_DELIVERY_RETRIED']),
     );
   });
 
@@ -348,6 +498,40 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
       })
       .expect(400);
 
+    await request(server)
+      .put('/api/v1/delivery-partners/me/availability')
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ availabilityStatus: DeliveryPartnerAvailabilityStatus.OFFLINE })
+      .expect(200);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment`)
+      .set(seeded.operationsHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.deliveryPartnerUserId,
+        reason: 'Offline partners must not receive new assignments',
+      })
+      .expect(400);
+
+    const onlineResponse = await request(server)
+      .put('/api/v1/delivery-partners/me/availability')
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE })
+      .expect(200);
+    expect(onlineResponse.body.data.availabilityStatus).toBe(
+      DeliveryPartnerAvailabilityStatus.ONLINE,
+    );
+
+    await request(server)
+      .get('/api/v1/delivery-partners/me')
+      .set(seeded.deliveryPartnerHeaders)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.data.availabilityStatus).toBe(DeliveryPartnerAvailabilityStatus.ONLINE);
+      });
+
+    await request(server).get('/api/v1/delivery-partners/me').set(seeded.farmerHeaders).expect(403);
+
     const assignmentResponse = await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment`)
       .set(seeded.operationsHeaders)
@@ -357,6 +541,90 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
       })
       .expect(201);
     const otpCode = assignmentResponse.body.data.deliveryAssignment.mockOtpCode as string;
+
+    const ownAssignmentList = await request(server)
+      .get('/api/v1/fulfilment/orders')
+      .query({ limit: 100 })
+      .set(seeded.deliveryPartnerHeaders)
+      .expect(200);
+    expect(
+      (ownAssignmentList.body.data.items as Array<{ id: string }>).map((item) => item.id),
+    ).toContain(orderId);
+
+    await request(server)
+      .get(`/api/v1/fulfilment/orders/${orderId}`)
+      .set(seeded.deliveryPartnerHeaders)
+      .expect(200);
+
+    await request(server)
+      .get(`/api/v1/fulfilment/orders/${orderId}`)
+      .set(seeded.otherDeliveryPartnerHeaders)
+      .expect(403);
+
+    // Pickup cannot begin until the assigned partner explicitly accepts.
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Pickup before acceptance must fail' })
+      .expect(409);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.otherDeliveryPartnerHeaders)
+      .send({ reason: 'Wrong partner must not accept' })
+      .expect(403);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Assigned partner accepted the route' })
+      .expect(201);
+
+    // Acceptance alone is insufficient: the physical package label must match.
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Pickup without package verification must fail' })
+      .expect(409);
+
+    const labelResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/dispatch-label`)
+      .set(seeded.distributorHeaders)
+      .send({ reason: 'Print package pickup label' })
+      .expect(201);
+    const packageQrCode = labelResponse.body.data.packageQrCode as string;
+    expect(packageQrCode).toMatch(/^VARDHNAM-PICKUP:/);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/dispatch-label`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Delivery partner cannot issue seller labels' })
+      .expect(403);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(seeded.otherDeliveryPartnerHeaders)
+      .send({ packageQrCode })
+      .expect(403);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ packageQrCode: `${packageQrCode}-wrong` })
+      .expect(400);
+
+    const pickupResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ packageQrCode })
+      .expect(201);
+    expect(pickupResponse.body.data.deliveryAssignment).toEqual(
+      expect.objectContaining({
+        pickupVerificationAttemptCount: 1,
+        pickupVerifiedAt: expect.any(String),
+        pickupVerifiedByUserId: seeded.deliveryPartnerUserId,
+      }),
+    );
 
     // A second delivery partner must not act on someone else's assignment.
     await request(server)
@@ -374,13 +642,17 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.otherDeliveryPartnerHeaders)
-      .send({ otpCode, proofNote: 'Wrong delivery partner must be refused' })
+      .send({
+        otpCode,
+        proofNote: 'Wrong delivery partner must be refused',
+        proofLocationStatus: 'UNAVAILABLE',
+      })
       .expect(403);
 
     await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.deliveryPartnerHeaders)
-      .send({ otpCode, proofNote: 'Delivered and OTP verified' })
+      .send({ otpCode, proofNote: 'Delivered and OTP verified', proofLocationStatus: 'DENIED' })
       .expect(201);
   });
 
@@ -401,6 +673,13 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     const wrongOtpCode = otpCode === '000000' ? '999999' : '000000';
 
     await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Accepted for OTP failure test' })
+      .expect(201);
+    await issueAndVerifyPackagePickup(server, orderId);
+
+    await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
       .set(seeded.deliveryPartnerHeaders)
       .send({ reason: 'Partner collected the package' })
@@ -409,7 +688,11 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.deliveryPartnerHeaders)
-      .send({ otpCode: wrongOtpCode, proofNote: 'Incorrect OTP must be refused' })
+      .send({
+        otpCode: wrongOtpCode,
+        proofNote: 'Incorrect OTP must be refused',
+        proofLocationStatus: 'UNAVAILABLE',
+      })
       .expect(400);
 
     const afterFailure = await prisma.productDeliveryAssignment.findUniqueOrThrow({
@@ -431,8 +714,101 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
     await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.deliveryPartnerHeaders)
-      .send({ otpCode, proofNote: 'Delivered after one failed attempt' })
+      .send({
+        otpCode,
+        proofNote: 'Delivered after one failed attempt',
+        proofLocationStatus: 'UNAVAILABLE',
+      })
       .expect(201);
+  });
+
+  it('requires a rejection reason and lets operations reassign rejected delivery work', async () => {
+    const server = requireServer();
+    const orderId = await createDispatchedOrder(server, 'delivery-reassignment');
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment`)
+      .set(seeded.operationsHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.deliveryPartnerUserId,
+        reason: 'Initial route assignment',
+      })
+      .expect(201);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/reject`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({})
+      .expect(400);
+
+    const rejectedResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/reject`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: 'Route capacity exhausted' })
+      .expect(201);
+    expect(rejectedResponse.body.data.status).toBe(ProductOrderStatus.READY_FOR_PICKUP);
+    expect(rejectedResponse.body.data.deliveryAssignment.status).toBe(
+      ProductDeliveryAssignmentStatus.REJECTED,
+    );
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/reassign`)
+      .set(seeded.distributorHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.otherDeliveryPartnerUserId,
+        reason: 'Distributor cannot reassign delivery work',
+      })
+      .expect(403);
+
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/reassign`)
+      .set(seeded.operationsHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.deliveryPartnerUserId,
+        reason: 'Must not return rejected work to the same partner',
+      })
+      .expect(400);
+
+    const reassignedResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/reassign`)
+      .set(seeded.operationsHeaders)
+      .send({
+        deliveryPartnerUserId: seeded.otherDeliveryPartnerUserId,
+        reason: 'Moved to a partner with route capacity',
+      })
+      .expect(201);
+    expect(reassignedResponse.body.data.deliveryAssignment).toEqual(
+      expect.objectContaining({
+        status: ProductDeliveryAssignmentStatus.ASSIGNED,
+        deliveryPartnerUserId: seeded.otherDeliveryPartnerUserId,
+        mockOtpCode: expect.stringMatching(/^[0-9]{6}$/),
+      }),
+    );
+
+    await request(server)
+      .get(`/api/v1/fulfilment/orders/${orderId}`)
+      .set(seeded.deliveryPartnerHeaders)
+      .expect(403);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.otherDeliveryPartnerHeaders)
+      .send({ reason: 'Reassigned route accepted' })
+      .expect(201);
+
+    const auditActions = await prisma.auditLog.findMany({
+      where: {
+        resourceType: 'ProductDeliveryAssignment',
+        resourceId: reassignedResponse.body.data.deliveryAssignment.id as string,
+      },
+      select: { action: true },
+    });
+    expect(auditActions.map((item) => item.action)).toEqual(
+      expect.arrayContaining([
+        'PRODUCT_DELIVERY_ASSIGNMENT_REJECTED',
+        'PRODUCT_DELIVERY_REASSIGNED',
+        'PRODUCT_DELIVERY_ASSIGNMENT_ACCEPTED',
+      ]),
+    );
   });
 
   function requireServer(): Parameters<typeof request>[0] {
@@ -440,6 +816,22 @@ describe('Phase 4A-4E distributor fulfilment and delivery foundation', () => {
       throw new Error('Nest application did not boot');
     }
     return app.getHttpServer();
+  }
+
+  async function issueAndVerifyPackagePickup(
+    server: Parameters<typeof request>[0],
+    orderId: string,
+  ): Promise<void> {
+    const labelResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/dispatch-label`)
+      .set(seeded.distributorHeaders)
+      .send({ reason: 'Issue package QR for integration delivery' })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ packageQrCode: labelResponse.body.data.packageQrCode })
+      .expect(201);
   }
 
   /** Drives cart -> checkout -> successful mock payment so the order reaches CONFIRMED. */
@@ -529,6 +921,7 @@ async function seedPhase4Data(): Promise<{
   farmerUserId: string;
   farmerAddressId: string;
   deliveryPartnerUserId: string;
+  otherDeliveryPartnerUserId: string;
   distributorOrganisationId: string;
   offerId: string;
   batchId: string;
@@ -580,6 +973,8 @@ async function seedPhase4Data(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125000,
     },
   });
@@ -600,6 +995,18 @@ async function seedPhase4Data(): Promise<{
     distributorOrganisation.id,
     PlatformRole.DISTRIBUTOR_OWNER,
   );
+  await prisma.distributorProfile.create({
+    data: {
+      organisationId: distributorOrganisation.id,
+      primaryContactName: 'Phase 4 Distributor Owner',
+      primaryContactPhone: '+919000000022',
+      operatingAddress: 'Plot 12, Agri Market Road',
+      city: 'Jaipur',
+      state: 'Rajasthan',
+      pincode: '302001',
+      serviceablePincodes: ['302001'],
+    },
+  });
 
   const rivalDistributorOrganisation = await createOrganisation({
     type: OrganisationType.DISTRIBUTOR,
@@ -633,6 +1040,14 @@ async function seedPhase4Data(): Promise<{
     deliveryOrganisation.id,
     PlatformRole.DELIVERY_PARTNER,
   );
+  await prisma.deliveryPartnerProfile.create({
+    data: {
+      userId: deliveryPartnerUser.id,
+      organisationId: deliveryOrganisation.id,
+      availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+      availabilityChangedAt: new Date(),
+    },
+  });
   const otherDeliveryPartnerUser = await createUser(
     `phase4-delivery-other-${suffix}@example.local`,
     'Phase 4 Other Delivery Partner',
@@ -642,6 +1057,14 @@ async function seedPhase4Data(): Promise<{
     deliveryOrganisation.id,
     PlatformRole.DELIVERY_PARTNER,
   );
+  await prisma.deliveryPartnerProfile.create({
+    data: {
+      userId: otherDeliveryPartnerUser.id,
+      organisationId: deliveryOrganisation.id,
+      availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+      availabilityChangedAt: new Date(),
+    },
+  });
 
   const farmerOrganisation = await createOrganisation({
     type: OrganisationType.VARDHNAM,
@@ -731,8 +1154,22 @@ async function seedPhase4Data(): Promise<{
       addressLine1: 'Khasra 42, Rampura Road',
       city: 'Jaipur',
       state: 'Rajasthan',
+      stateCode: '08',
       pincode: '302001',
       isDefault: true,
+    },
+  });
+
+  await prisma.commissionRule.create({
+    data: {
+      marketplaceCommissionBps: 500,
+      promoterCommissionBps: 0,
+      deliveryFeePaise: 2500,
+      status: CommissionRuleStatus.ACTIVE,
+      effectiveFrom: new Date(Date.now() - 86_400_000),
+      createdByUserId: adminUser.id,
+      createdByRole: PlatformRole.SUPER_ADMIN,
+      reason: 'Phase 4 delivery integration fixture',
     },
   });
 
@@ -767,6 +1204,7 @@ async function seedPhase4Data(): Promise<{
     farmerUserId: farmerUser.id,
     farmerAddressId: farmerAddress.id,
     deliveryPartnerUserId: deliveryPartnerUser.id,
+    otherDeliveryPartnerUserId: otherDeliveryPartnerUser.id,
     distributorOrganisationId: distributorOrganisation.id,
     offerId: offer.id,
     batchId: batch.id,
@@ -795,6 +1233,8 @@ async function createOrganisation(input: {
       legalName: input.legalName,
       displayName: input.displayName,
       gstin: input.gstin ?? null,
+      registeredStateCode: input.gstin?.slice(0, 2) ?? null,
+      gstinVerifiedAt: input.gstin ? new Date() : null,
       status: OrganisationStatus.ACTIVE,
     },
   });

@@ -104,7 +104,7 @@
 - Completed Phase 4F: end-to-end MVP acceptance spec driving PRODUCT_REQUIREMENTS section 30 through the HTTP API
 - Completed Phase 4F: idempotent demo seed for the acceptance scenario (`npm run seed:demo`)
 - Completed Phase 4F: `DELIVERY_PARTNER` organisation type (see `docs/DECISIONS/0002-organisation-type-naming.md`)
-- Future: real notification delivery, geotagged proof capture, payout calculation and partner-app delivery workflows
+- Future: real notification delivery, authorised photo proof storage, payout calculation and the remaining partner-app delivery workflows
 
 ## Phase 1D - Authentication
 
@@ -127,7 +127,9 @@
 - Completed Phase 6: promoter attribution create/revoke/list with the single-primary-attribution rule and a promoter commission ledger entry type
 - Completed Phase 6: payout accounts with self-service upsert, admin verification and partner earnings statements
 - Completed Phase 6: delivery fee support in the financial ledger
-- Remaining Phase 6: promoter app workflows (WP-13), delivery partner app workflows (WP-12), service provider workflows, service listings and service bookings (WP-14)
+- Completed Phase 6 foundation: the shared partner Flutter shell now has OTP authentication, secure session refresh, multi-membership selection, English/Hindi localisation and strict role routing for promoters, sales partners, service providers and delivery partners.
+- Completed Phase 6 delivery slices: a delivery partner manages audited organisation-scoped online/offline availability; only online partners can receive new assignments; assigned partners can list/read only their own work, explicitly accept or reason-reject it, verify seller-issued package QR pickup, open navigation/calling handoffs, mark verified work out-for-delivery and complete delivery with the farmer OTP. Completion records permission-aware geotag proof (granted, denied or unavailable) without blocking the OTP path. Operations can auditably reassign rejected work to a different online partner with a fresh OTP.
+- Remaining Phase 6: shared partner KYC submission, authorised photo delivery proof after WP-08 storage exists, service provider workflows, service listings and service bookings (WP-14). Structured failed-delivery reason and due-only retry with a fresh OTP are complete. Return-pickup assignment, partner response and collection are also complete. Promoter-assisted farmer registration verifies the farmer's OTP without exposing farmer session tokens and immediately applies the existing lead-conversion attribution rule. General promoter territory assignment preserves the shared Club profile as one source of truth while remaining independently permissioned and organisation-scoped. General farm/crop surveys now authorize through active attribution, remain independent of Club membership and intentionally omit precise location. Append-only promoter visit logging is complete for owned leads and actively attributed farmers, with bilingual history, controlled purposes and explicit one-time permission-aware location capture.
 
 ## Phase 7 - Integrations and Analytics
 
@@ -137,15 +139,40 @@
 - Completed cross-cutting: support ticket lifecycle (create, assign, wait, resume, escalate, resolve, close, reopen) with evidence
 - Remaining Phase 7: real notification providers and event wiring (WP-06), sandbox payment provider and signed webhooks (WP-07), portal dashboard wiring and demand reports (WP-09)
 
+## Phase 8 - Platform infrastructure
+
+- Completed WP-04 (2026-08-17): BullMQ queues consumed by a separate worker process, correlation-ID-carrying job envelopes, exponential-backoff retry, per-queue dead-letter queues with audited operator replay, `ADMIN`-only `/admin/jobs` surface behind new `jobs:read`/`jobs:manage` permissions, and `/health/ready` queue reporting.
+- Completed WP-04: scheduled commission finalisation, inventory batch expiry, OTP challenge cleanup and refresh-token pruning. `support-sla-breach-sweep` moved to WP-06 (it needs a breach flag and a notification to be worth persisting); `return-window-sweep` dropped as redundant.
+- Completed WP-08 (2026-08-17): `StoredFile` model, storage provider abstraction with a working local provider that mimics presigned-URL semantics, direct-to-storage upload/download, per-purpose content-type and size policy validated at issue and again against the stored object, scan-gated availability on the `documents` queue, audited permission-checked downloads, and a documented retention policy. A cloud provider awaits the hosting decision; the factory throws rather than falling back to local disk.
+- Completed WP-06 (2026-08-18): per-channel notification provider abstraction, delivery worker on the `notifications` queue with retry and dead-lettering, a minute-interval dispatch sweep that required no producer changes, per-channel templates with language-aware SMS segment limits, recipient preferences protecting transactional categories, and OTPs routed through the SMS transport without ever being persisted as notification rows. All transports remain mock pending a BSP account.
+- Completed 2026-08-18: scheduled Kisan Club advisory generation, closing the temporary manual-trigger boundary recorded in `docs/DECISIONS/0009-advisory-content-governance.md`.
+- Completed 2026-08-18: Kisan Club demo seed data — an active membership with assigned promoter and territory, a farm and active wheat crop cycle, a Vardhnam-owned Club product with stock and a live offer, a platform-funded benefit rule and an approved bilingual advisory. See `docs/FARMER_APP_TESTING_GUIDE.md`.
+- Remaining Phase 8: WP-07 registers a handler on the `payment-webhooks` queue via `JobHandlerRegistry`. Real SMS, WhatsApp, push, email and payment providers all await external accounts rather than code.
+
 ## Not Started
 
 - Returns, refunds and disputes (WP-05) - the `ProductOrderStatus` return/refund/dispute values exist but no code can produce them
 - Service marketplace (WP-14)
-- Partner mobile application beyond the static skeleton (WP-12, WP-13)
+- Remaining partner delivery, promoter and service workflows beyond the authenticated role-routed shell; WP-13 now includes the first own-scoped farmer-lead capture/pipeline slice (WP-12, WP-13, WP-14)
 - Product reviews and ratings
-- File and document storage - all document handling is metadata only today (WP-08)
-- Background job infrastructure - `bullmq` is installed but unused (WP-04)
+- ~~File and document storage~~ - completed 2026-08-17, see Phase 8 above (WP-08)
+- ~~Background job infrastructure~~ - completed 2026-08-17, see Phase 8 above (WP-04)
 - Distributor allocation engine with recorded allocation reasons (WP-15)
 - GST modelling and invoice PDFs (WP-15)
 - Runtime internationalisation (WP-11)
 - Deployment infrastructure and observability (WP-16)
+
+# Kisan Club delivery status
+
+- KC-01 membership foundation: completed 2026-08-11.
+- KC-02 farm and crop registry: backend implemented; dedicated-database integration run pending.
+- KC-03 promoter territories and assignments: backend implemented; dedicated-database integration run pending.
+- KC-04 Club catalogue programmes: backend implemented; dedicated-database integration run pending.
+- KC-05 Club pricing and finance: backend implemented 2026-08-11, including benefit administration/evaluation, checkout redemption, platform subsidy ledger treatment and refund-safe allocation; dedicated-database integration run pending.
+- KC-06 Club fulfilment coordination: completed and dedicated-database verified 2026-08-14, including payment-confirmation assignment creation, scoped promoter queues, audited state transitions, explicit operations reassignment and independence from the seller order state machine.
+- KC-07 benefit tokens and assisted purchase: backend implemented 2026-08-11, including one-time hashed bearer tokens, expiry/attempt/replay controls, active-promoter resource scope, live checkout revalidation, normal inventory reservation and mandatory in-app payment; dedicated-database integration run pending.
+- KC-08 farmer app Club module: completed and Flutter-verified 2026-08-14. The bilingual, membership-aware module includes dashboard gating, free join and resumable farm-profile completion, Club home/catalogue/detail and normal seller-offer commerce reuse, farmer-owned farms and crop cycles with activity/harvest recording, assigned-promoter visibility, consent-gated advisories, one-time benefit-token issuance, and duplicate-safe paginated token history with exact backend status filtering. Financial values and token lifecycle decisions remain backend-authoritative.
+- KC-09 advisory: completed 2026-08-13. Human-authored bilingual rule versioning, independent agronomist approval, deterministic crop-stage matching, consent-gated farmer events, localised in-app notifications, farmer read/dismiss flows and the permission-filtered business portal workspace are implemented. Focused HTTP/database acceptance coverage passes against a dedicated PostgreSQL test database.
+- KC-10 partner app Club module: completed and Flutter-verified 2026-08-14. KC-10A through KC-10D provide promoter/sales-partner-only navigation, backend-scoped assigned-farmer list/detail, allowlisted farm/crop presentation, idempotent one-time benefit-token redemption into a pending-payment assisted checkout, own-scope Club fulfilment inbox/detail/history with backend-validated coordination transitions, audited assigned-farmer farm/current-crop survey submission without precise-location collection, and recipient-scoped commission/payout statements using backend totals plus masked own-account status. Shared payout-account setup remains WP-12 rather than KC-10.
+- KC-11 business portal: completed 2026-08-14. Permission-filtered advisory, member, field-network, commercial and Club fulfilment workspaces are implemented. Staff can administer members, territories, promoter eligibility/capacity, Vardhnam-only product programmes and platform-funded benefit rules; authorised staff and assigned promoters can operate the separately scoped coordination queue. Programme/benefit rules, financial calculations, coordination transitions and the distributor seller-order lifecycle remain backend-authoritative.
+- KC-12 Club intelligence: completed 2026-08-14. Permission-protected crop/district acreage, season, lifecycle and sowing-month aggregates plus promoter capacity and current-holder coordination indicators are available through typed APIs and an operational-table portal workspace. Farmer identity and precise location are not exposed. Demand forecasting remains deferred until completed-season conversion history exists.

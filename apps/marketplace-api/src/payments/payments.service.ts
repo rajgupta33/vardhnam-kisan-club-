@@ -16,9 +16,6 @@ import {
   ProductCheckoutStatus,
   ProductOrderStatus,
   type FarmerProfile,
-  type PaymentIntent,
-  type ProductCheckout,
-  type ProductOrder,
 } from '@prisma/client';
 import { AccessService } from '../access/access.service';
 import { PermissionCode } from '../access/permission-codes';
@@ -26,35 +23,23 @@ import { AuditService, type AuditRecordInput } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
-import { FinanceService } from '../finance/finance.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ConfirmMockPaymentIntentDto } from './dto/confirm-mock-payment-intent.dto';
 import { MockPaymentOutcome } from './dto/confirm-mock-payment-intent.dto';
 import type { CreateMockPaymentIntentDto } from './dto/create-mock-payment-intent.dto';
 import type { ListPaymentIntentsQueryDto } from './dto/list-payment-intents-query.dto';
-
-const paymentCheckoutInclude = Prisma.validator<Prisma.ProductCheckoutInclude>()({
-  orders: {
-    orderBy: { createdAt: 'asc' },
-  },
-});
-
-const paymentIntentDetailInclude = Prisma.validator<Prisma.PaymentIntentInclude>()({
-  checkout: {
-    include: paymentCheckoutInclude,
-  },
-  events: {
-    orderBy: { createdAt: 'asc' },
-  },
-});
-
-type PaymentClient = PrismaService | Prisma.TransactionClient;
-type PaymentCheckoutWithOrders = Prisma.ProductCheckoutGetPayload<{
-  include: typeof paymentCheckoutInclude;
-}>;
-type PaymentIntentWithDetails = Prisma.PaymentIntentGetPayload<{
-  include: typeof paymentIntentDetailInclude;
-}>;
+import { PaymentSettlementService } from './payment-settlement.service';
+import {
+  checkoutAuditValue,
+  paymentIntentAuditValue,
+  paymentIntentDetailInclude,
+  paymentCheckoutInclude,
+  toPaymentIntentDetail,
+  type PaymentCheckoutWithOrders,
+  type PaymentClient,
+  type PaymentIntentWithDetails,
+} from './payment-shapes';
+import { PaymentProviderRegistry } from './providers/payment-provider.registry';
 
 interface IdempotencyInput {
   scope: string;
@@ -70,7 +55,8 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly accessService: AccessService,
-    private readonly financeService: FinanceService,
+    private readonly settlementService: PaymentSettlementService,
+    private readonly providerRegistry: PaymentProviderRegistry,
   ) {}
 
   async createMockPaymentIntent(
@@ -154,7 +140,7 @@ export class PaymentsService {
     ]);
 
     return {
-      items: items.map((item) => this.toPaymentIntentDetail(item)),
+      items: items.map((item) => toPaymentIntentDetail(item)),
       page,
       limit,
       total,
@@ -174,7 +160,7 @@ export class PaymentsService {
       profile.id,
     );
 
-    return this.toPaymentIntentDetail(paymentIntent);
+    return toPaymentIntentDetail(paymentIntent);
   }
 
   private async createMockPaymentIntentInTransaction(
@@ -218,26 +204,38 @@ export class PaymentsService {
             });
           }
 
-          return this.toPaymentIntentDetail(existingOpenIntent);
+          return toPaymentIntentDetail(existingOpenIntent);
         }
 
         this.ensureCheckoutCanStartPayment(checkout);
 
         const previousCheckout = checkout;
-        const providerReference = `mock_${randomUUID()}`;
+        const provider = this.providerRegistry.current();
+        const amountPaise = checkout.farmerPayablePaise ?? checkout.subtotalPaise;
+        // Our reference is minted before the gateway is asked, so a create call
+        // that times out after the gateway acted can still be reconciled: the
+        // reference we would have used is the one the gateway echoes back.
+        const reference = `${provider.name}_${randomUUID()}`;
+        const created = await provider.createIntent({
+          reference,
+          amountPaise,
+          currency: 'INR',
+          notes: { checkoutId: checkout.id, farmerProfileId: profile.id },
+        });
+
         const paymentIntent = await tx.paymentIntent.create({
           data: {
             checkoutId: checkout.id,
             farmerProfileId: profile.id,
-            providerMode: PaymentProviderMode.MOCK,
-            providerReference,
+            providerMode: provider.mode,
+            providerReference: created.providerReference,
             status: PaymentIntentStatus.PROCESSING,
-            amountPaise: checkout.subtotalPaise,
+            amountPaise,
             currency: 'INR',
           },
         });
 
-        await this.recordPaymentEvent(tx, {
+        await this.settlementService.recordPaymentEvent(tx, {
           paymentIntent,
           eventType: PaymentEventType.INTENT_CREATED,
           status: PaymentIntentStatus.PROCESSING,
@@ -245,9 +243,10 @@ export class PaymentsService {
           requestId,
           payload: {
             checkoutId: checkout.id,
-            amountPaise: checkout.subtotalPaise,
+            amountPaise,
             currency: 'INR',
-            providerMode: PaymentProviderMode.MOCK,
+            providerMode: provider.mode,
+            provider: provider.name,
           },
         });
 
@@ -262,15 +261,15 @@ export class PaymentsService {
             action: 'PRODUCT_CHECKOUT_PAYMENT_PROCESSING',
             resourceType: 'ProductCheckout',
             resourceId: updatedCheckout.id,
-            previousValue: this.checkoutAuditValue(previousCheckout),
-            newValue: this.checkoutAuditValue(updatedCheckout),
+            previousValue: checkoutAuditValue(previousCheckout),
+            newValue: checkoutAuditValue(updatedCheckout),
             requestId,
             reason: dto.reason,
           }),
           tx,
         );
 
-        await this.transitionProductOrders(tx, {
+        await this.settlementService.transitionProductOrders(tx, {
           orders: checkout.orders,
           toStatus: ProductOrderStatus.PAYMENT_PROCESSING,
           action: 'PRODUCT_ORDER_PAYMENT_PROCESSING',
@@ -284,7 +283,7 @@ export class PaymentsService {
             action: 'MOCK_PAYMENT_INTENT_CREATED',
             resourceType: 'PaymentIntent',
             resourceId: paymentIntent.id,
-            newValue: this.paymentIntentAuditValue(paymentIntent),
+            newValue: paymentIntentAuditValue(paymentIntent),
             requestId,
             reason: dto.reason,
           }),
@@ -296,7 +295,7 @@ export class PaymentsService {
           paymentIntent.id,
           profile.id,
         );
-        return this.toPaymentIntentDetail(savedPaymentIntent);
+        return toPaymentIntentDetail(savedPaymentIntent);
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -304,6 +303,14 @@ export class PaymentsService {
     );
   }
 
+  /**
+   * The farmer-facing mock confirmation.
+   *
+   * Only meaningful while `PAYMENT_PROVIDER=mock`. With a real gateway the
+   * client never decides the outcome -- a redirect back from a payment page is
+   * not proof of payment -- so this path refuses to run and the intent settles
+   * from a signature-verified webhook instead.
+   */
   private async confirmMockPaymentIntentInTransaction(
     paymentIntentId: string,
     dto: ConfirmMockPaymentIntentDto,
@@ -319,125 +326,42 @@ export class PaymentsService {
           profile.id,
         );
 
-        if (
-          paymentIntent.status === PaymentIntentStatus.SUCCEEDED ||
-          paymentIntent.status === PaymentIntentStatus.FAILED
-        ) {
+        if (paymentIntent.providerMode !== PaymentProviderMode.MOCK) {
+          throw new BadRequestException({
+            code: ApiErrorCode.VALIDATION_FAILED,
+            message: 'This payment must be confirmed by the provider, not by the client',
+          });
+        }
+
+        if (this.settlementService.isTerminal(paymentIntent)) {
           throw new ConflictException({
             code: ApiErrorCode.CONFLICT,
             message: 'Payment intent has already reached a terminal status',
           });
         }
 
-        this.ensurePaymentIntentCanBeConfirmed(paymentIntent);
-
-        await this.recordPaymentEvent(tx, {
-          paymentIntent,
-          eventType: PaymentEventType.CONFIRMATION_STARTED,
-          status: PaymentIntentStatus.PROCESSING,
-          actor,
-          requestId,
-          payload: {
-            outcome: dto.outcome,
-            failureCode: dto.failureCode ?? null,
-          },
-        });
+        this.settlementService.ensureCanSettle(paymentIntent);
 
         const isSuccess = dto.outcome === MockPaymentOutcome.SUCCESS;
-        const nextPaymentStatus = isSuccess
-          ? PaymentIntentStatus.SUCCEEDED
-          : PaymentIntentStatus.FAILED;
-        const nextCheckoutStatus = isSuccess
-          ? ProductCheckoutStatus.PAID
-          : ProductCheckoutStatus.PAYMENT_FAILED;
-        const nextOrderStatus = isSuccess
-          ? ProductOrderStatus.CONFIRMED
-          : ProductOrderStatus.PAYMENT_FAILED;
-        const paymentAuditAction = isSuccess ? 'MOCK_PAYMENT_CONFIRMED' : 'MOCK_PAYMENT_FAILED';
-        const checkoutAuditAction = isSuccess
-          ? 'PRODUCT_CHECKOUT_PAYMENT_PAID'
-          : 'PRODUCT_CHECKOUT_PAYMENT_FAILED';
-        const orderAuditAction = isSuccess
-          ? 'PRODUCT_ORDER_PAYMENT_CONFIRMED'
-          : 'PRODUCT_ORDER_PAYMENT_FAILED';
-
-        const updatedPaymentIntent = await tx.paymentIntent.update({
-          where: { id: paymentIntent.id },
-          data: {
-            status: nextPaymentStatus,
-            failureCode: isSuccess ? null : (dto.failureCode ?? 'MOCK_PAYMENT_FAILED'),
-            failureMessage: isSuccess
-              ? null
-              : (dto.failureMessage ?? 'Mock payment failed for local testing'),
-          },
-        });
-        await this.recordPaymentEvent(tx, {
-          paymentIntent: updatedPaymentIntent,
-          eventType: isSuccess
-            ? PaymentEventType.PAYMENT_SUCCEEDED
-            : PaymentEventType.PAYMENT_FAILED,
-          status: nextPaymentStatus,
+        await this.settlementService.settle(tx, {
+          paymentIntent,
+          outcome: isSuccess ? PaymentIntentStatus.SUCCEEDED : PaymentIntentStatus.FAILED,
           actor,
           requestId,
-          payload: {
-            outcome: dto.outcome,
-            failureCode: updatedPaymentIntent.failureCode ?? null,
-            failureMessage: updatedPaymentIntent.failureMessage ?? null,
-          },
-        });
-
-        const updatedCheckout = await tx.productCheckout.update({
-          where: { id: paymentIntent.checkoutId },
-          data: {
-            status: nextCheckoutStatus,
-          },
-        });
-
-        await this.auditService.record(
-          this.withActor(actor, {
-            action: checkoutAuditAction,
-            resourceType: 'ProductCheckout',
-            resourceId: updatedCheckout.id,
-            previousValue: this.checkoutAuditValue(paymentIntent.checkout),
-            newValue: this.checkoutAuditValue(updatedCheckout),
-            requestId,
-            reason: dto.reason,
-          }),
-          tx,
-        );
-
-        await this.transitionProductOrders(tx, {
-          orders: paymentIntent.checkout.orders,
-          toStatus: nextOrderStatus,
-          action: orderAuditAction,
-          actor,
-          requestId,
+          source: 'mock-confirm',
           reason: dto.reason ?? (isSuccess ? 'Mock payment confirmed' : 'Mock payment failed'),
+          failureCode: isSuccess ? undefined : (dto.failureCode ?? 'MOCK_PAYMENT_FAILED'),
+          failureMessage: isSuccess
+            ? undefined
+            : (dto.failureMessage ?? 'Mock payment failed for local testing'),
         });
-
-        if (isSuccess) {
-          await this.financeService.recordFarmerPayment(tx, updatedPaymentIntent, actor, requestId);
-        }
-
-        await this.auditService.record(
-          this.withActor(actor, {
-            action: paymentAuditAction,
-            resourceType: 'PaymentIntent',
-            resourceId: updatedPaymentIntent.id,
-            previousValue: this.paymentIntentAuditValue(paymentIntent),
-            newValue: this.paymentIntentAuditValue(updatedPaymentIntent),
-            requestId,
-            reason: dto.reason,
-          }),
-          tx,
-        );
 
         const savedPaymentIntent = await this.findPaymentIntentForProfileOrThrow(
           tx,
           paymentIntent.id,
           profile.id,
         );
-        return this.toPaymentIntentDetail(savedPaymentIntent);
+        return toPaymentIntentDetail(savedPaymentIntent);
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -467,10 +391,12 @@ export class PaymentsService {
         message: 'Checkout must contain at least one child order before payment',
       });
     }
-    if (checkout.subtotalPaise <= 0) {
+    const checkoutBenefitPaise = checkout.clubBenefitPaise ?? 0;
+    const checkoutFarmerPayablePaise = checkout.farmerPayablePaise ?? checkout.subtotalPaise;
+    if (checkout.subtotalPaise <= 0 || checkoutFarmerPayablePaise < 0) {
       throw new BadRequestException({
         code: ApiErrorCode.VALIDATION_FAILED,
-        message: 'Checkout subtotal must be greater than zero before payment',
+        message: 'Checkout financial totals are invalid before payment',
       });
     }
 
@@ -482,6 +408,24 @@ export class PaymentsService {
       throw new BadRequestException({
         code: ApiErrorCode.VALIDATION_FAILED,
         message: 'Checkout subtotal does not match child order totals',
+      });
+    }
+    const childOrderBenefits = checkout.orders.reduce(
+      (total, order) => total + (order.clubBenefitPaise ?? 0),
+      0,
+    );
+    const childOrderPayable = checkout.orders.reduce(
+      (total, order) => total + (order.farmerPayablePaise ?? order.subtotalPaise),
+      0,
+    );
+    if (
+      childOrderBenefits !== checkoutBenefitPaise ||
+      childOrderPayable !== checkoutFarmerPayablePaise ||
+      checkoutFarmerPayablePaise + checkoutBenefitPaise !== checkout.subtotalPaise
+    ) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Checkout benefit totals do not match child order totals',
       });
     }
 
@@ -496,110 +440,6 @@ export class PaymentsService {
         });
       }
     }
-  }
-
-  private ensurePaymentIntentCanBeConfirmed(paymentIntent: PaymentIntentWithDetails): void {
-    if (
-      paymentIntent.checkout.status !== ProductCheckoutStatus.PAYMENT_PROCESSING &&
-      paymentIntent.checkout.status !== ProductCheckoutStatus.PENDING_PAYMENT
-    ) {
-      throw new BadRequestException({
-        code: ApiErrorCode.VALIDATION_FAILED,
-        message: 'Checkout is not ready for payment confirmation',
-      });
-    }
-
-    for (const order of paymentIntent.checkout.orders) {
-      if (
-        order.status !== ProductOrderStatus.PAYMENT_PROCESSING &&
-        order.status !== ProductOrderStatus.INVENTORY_RESERVED
-      ) {
-        throw new BadRequestException({
-          code: ApiErrorCode.VALIDATION_FAILED,
-          message: 'All child orders must be in payment processing before confirmation',
-        });
-      }
-    }
-  }
-
-  private async transitionProductOrders(
-    tx: Prisma.TransactionClient,
-    input: {
-      orders: ProductOrder[];
-      toStatus: ProductOrderStatus;
-      action: string;
-      actor: CurrentUser;
-      requestId?: string | undefined;
-      reason: string;
-    },
-  ): Promise<void> {
-    for (const order of input.orders) {
-      if (order.status === input.toStatus) {
-        continue;
-      }
-
-      const updatedOrder = await tx.productOrder.update({
-        where: { id: order.id },
-        data: {
-          status: input.toStatus,
-        },
-      });
-
-      await tx.productOrderStatusHistory.create({
-        data: {
-          productOrderId: order.id,
-          fromStatus: order.status,
-          toStatus: input.toStatus,
-          actorUserId: input.actor.userId,
-          actorRole: input.actor.role,
-          requestId: input.requestId ?? null,
-          reason: input.reason,
-        },
-      });
-
-      await this.auditService.record(
-        this.withActor(input.actor, {
-          action: input.action,
-          resourceType: 'ProductOrder',
-          resourceId: order.id,
-          organisationId: order.sellerOrganisationId,
-          previousValue: this.productOrderAuditValue(order),
-          newValue: this.productOrderAuditValue(updatedOrder),
-          requestId: input.requestId,
-          reason: input.reason,
-        }),
-        tx,
-      );
-    }
-  }
-
-  private async recordPaymentEvent(
-    tx: Prisma.TransactionClient,
-    input: {
-      paymentIntent: PaymentIntent;
-      eventType: PaymentEventType;
-      status: PaymentIntentStatus;
-      actor: CurrentUser;
-      requestId?: string | undefined;
-      payload?: Prisma.InputJsonObject | undefined;
-    },
-  ): Promise<void> {
-    const data: Prisma.PaymentEventUncheckedCreateInput = {
-      paymentIntentId: input.paymentIntent.id,
-      eventType: input.eventType,
-      status: input.status,
-      providerReference: input.paymentIntent.providerReference,
-      actorUserId: input.actor.userId,
-      actorRole: input.actor.role,
-      requestId: input.requestId ?? null,
-    };
-    if (input.payload !== undefined) {
-      data.payload = input.payload;
-    }
-
-    await tx.paymentEvent.create({
-      data,
-    });
   }
 
   private async findCheckoutForProfileOrThrow(
@@ -664,98 +504,6 @@ export class PaymentsService {
     }
 
     return profile;
-  }
-
-  private toPaymentIntentDetail(paymentIntent: PaymentIntentWithDetails) {
-    return {
-      id: paymentIntent.id,
-      checkoutId: paymentIntent.checkoutId,
-      farmerProfileId: paymentIntent.farmerProfileId,
-      providerMode: paymentIntent.providerMode,
-      providerReference: paymentIntent.providerReference,
-      status: paymentIntent.status,
-      amountPaise: paymentIntent.amountPaise,
-      currency: paymentIntent.currency,
-      failureCode: paymentIntent.failureCode,
-      failureMessage: paymentIntent.failureMessage,
-      checkout: {
-        id: paymentIntent.checkout.id,
-        status: paymentIntent.checkout.status,
-        subtotalPaise: paymentIntent.checkout.subtotalPaise,
-        itemCount: paymentIntent.checkout.itemCount,
-        childOrderCount: paymentIntent.checkout.childOrderCount,
-        orders: paymentIntent.checkout.orders.map((order) => ({
-          id: order.id,
-          orderNumber: order.orderNumber,
-          status: order.status,
-          sellerOrganisationId: order.sellerOrganisationId,
-          sellerNameSnapshot: order.sellerNameSnapshot,
-          subtotalPaise: order.subtotalPaise,
-          itemCount: order.itemCount,
-          createdAt: order.createdAt,
-          updatedAt: order.updatedAt,
-        })),
-        createdAt: paymentIntent.checkout.createdAt,
-        updatedAt: paymentIntent.checkout.updatedAt,
-      },
-      events: paymentIntent.events.map((event) => ({
-        id: event.id,
-        eventType: event.eventType,
-        status: event.status,
-        providerReference: event.providerReference,
-        payload: event.payload,
-        actorUserId: event.actorUserId,
-        actorRole: event.actorRole,
-        requestId: event.requestId,
-        createdAt: event.createdAt,
-      })),
-      createdAt: paymentIntent.createdAt,
-      updatedAt: paymentIntent.updatedAt,
-    };
-  }
-
-  private checkoutAuditValue(checkout: ProductCheckout): Prisma.InputJsonObject {
-    return {
-      farmerProfileId: checkout.farmerProfileId,
-      sourceCartId: checkout.sourceCartId,
-      deliveryAddressId: checkout.deliveryAddressId,
-      serviceablePincode: checkout.serviceablePincode,
-      status: checkout.status,
-      subtotalPaise: checkout.subtotalPaise,
-      itemCount: checkout.itemCount,
-      childOrderCount: checkout.childOrderCount,
-    };
-  }
-
-  private productOrderAuditValue(order: ProductOrder): Prisma.InputJsonObject {
-    return {
-      checkoutId: order.checkoutId,
-      orderType: order.orderType,
-      farmerProfileId: order.farmerProfileId,
-      deliveryAddressId: order.deliveryAddressId,
-      sellerOrganisationId: order.sellerOrganisationId,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      serviceablePincode: order.serviceablePincode,
-      sellerNameSnapshot: order.sellerNameSnapshot,
-      sellerGstinSnapshot: order.sellerGstinSnapshot,
-      subtotalPaise: order.subtotalPaise,
-      itemCount: order.itemCount,
-    };
-  }
-
-  private paymentIntentAuditValue(paymentIntent: PaymentIntent): Prisma.InputJsonObject {
-    return {
-      checkoutId: paymentIntent.checkoutId,
-      farmerProfileId: paymentIntent.farmerProfileId,
-      providerMode: paymentIntent.providerMode,
-      providerReference: paymentIntent.providerReference,
-      status: paymentIntent.status,
-      amountPaise: paymentIntent.amountPaise,
-      currency: paymentIntent.currency,
-      failureCode: paymentIntent.failureCode,
-      failureMessage: paymentIntent.failureMessage,
-    };
   }
 
   private async runIdempotent<T>(input: IdempotencyInput, handler: () => Promise<T>): Promise<T> {

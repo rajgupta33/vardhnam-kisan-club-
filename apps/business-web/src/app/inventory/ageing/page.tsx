@@ -1,6 +1,14 @@
 import Link from 'next/link';
-import type { InventoryAgeingQuery, InventoryAgeingReportItem } from '@vardhnam/api-client';
+import type {
+  InventoryAgeingBucket,
+  InventoryAgeingQuery,
+  InventoryAgeingReportItem,
+} from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
+import { DataTable, type DataTableColumn } from '../../../components/data-table';
+import { EmptyState } from '../../../components/empty-state';
+import { Pagination } from '../../../components/pagination';
+import { StatusBadge } from '../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
 import {
   loadExpiringInventory,
@@ -22,15 +30,17 @@ const ageingViews: Array<{ value: AgeingView; label: string }> = [
   { value: 'low-stock', label: 'Low Stock' },
   { value: 'expiring', label: 'Expiring Batches' },
 ];
+const limit = 50;
 
 export default async function InventoryAgeingPage({ searchParams }: InventoryAgeingPageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const view = parseAgeingView(readParam(resolvedSearchParams.view)) ?? 'all';
   const lowStockThreshold = parsePositiveInt(readParam(resolvedSearchParams.lowStockThreshold));
   const expiringWithinDays = parsePositiveInt(readParam(resolvedSearchParams.expiringWithinDays));
+  const page = parsePage(readParam(resolvedSearchParams.page));
   const query: InventoryAgeingQuery = {
-    page: 1,
-    limit: 50,
+    page,
+    limit,
     ...(lowStockThreshold !== undefined ? { lowStockThreshold } : {}),
     ...(expiringWithinDays !== undefined ? { expiringWithinDays } : {}),
   };
@@ -41,12 +51,13 @@ export default async function InventoryAgeingPage({ searchParams }: InventoryAge
         ? await loadExpiringInventory(query)
         : await loadInventoryAgeing(query);
   const items = reportResult.ok ? reportResult.data.items : [];
+  const total = reportResult.ok ? reportResult.data.total : 0;
   const lowStockCount = items.filter((item) => item.isLowStock).length;
   const expiringCount = items.filter((item) => item.isExpiringSoon).length;
   const blockedOrExpiredCount = items.filter((item) => item.isBlocked || item.isExpired).length;
   const statuses = [
     {
-      label: reportResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: reportResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: reportResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -89,7 +100,7 @@ export default async function InventoryAgeingPage({ searchParams }: InventoryAge
           {ageingViews.map((ageingView) => (
             <FilterLink
               active={view === ageingView.value}
-              href={buildAgeingHref(ageingView.value, lowStockThreshold, expiringWithinDays)}
+              href={buildAgeingHref(ageingView.value, lowStockThreshold, expiringWithinDays, 1)}
               key={ageingView.value}
               label={ageingView.label}
             />
@@ -118,10 +129,10 @@ export default async function InventoryAgeingPage({ searchParams }: InventoryAge
       </section>
 
       {!reportResult.ok ? (
-        <section className="emptyState">
-          <h3>Inventory Report API Connection Blocked</h3>
-          <p className="mutedText">{reportResult.error}</p>
-        </section>
+        <EmptyState
+          description={reportResult.error}
+          title="Inventory Report API Connection Blocked"
+        />
       ) : (
         <section className="panel" aria-label="Inventory ageing report">
           <div className="sectionHeader">
@@ -134,6 +145,14 @@ export default async function InventoryAgeingPage({ searchParams }: InventoryAge
             </div>
           </div>
           <InventoryAgeingTable items={items} />
+          <Pagination
+            buildHref={(targetPage) =>
+              buildAgeingHref(view, lowStockThreshold, expiringWithinDays, targetPage)
+            }
+            limit={limit}
+            page={page}
+            total={total}
+          />
         </section>
       )}
     </BusinessShell>
@@ -141,65 +160,90 @@ export default async function InventoryAgeingPage({ searchParams }: InventoryAge
 }
 
 function InventoryAgeingTable({ items }: { items: InventoryAgeingReportItem[] }) {
-  if (items.length === 0) {
-    return <p className="mutedText">No inventory rows match the current report filters.</p>;
-  }
+  const columns: DataTableColumn<InventoryAgeingReportItem>[] = [
+    {
+      key: 'batch',
+      header: 'Batch',
+      render: (item) => (
+        <>
+          {item.batch.batchNumber}
+          <br />
+          <span className="mutedText">
+            {item.distributorOrganisation?.displayName ?? 'Distributor'}
+          </span>
+        </>
+      ),
+    },
+    {
+      key: 'product',
+      header: 'Product',
+      render: (item) => (
+        <>
+          {item.product.name}
+          <br />
+          <span className="mutedText">{item.variant.variantName}</span>
+        </>
+      ),
+    },
+    {
+      key: 'warehouse',
+      header: 'Warehouse',
+      render: (item) => item.warehouse?.name ?? 'Not recorded',
+    },
+    {
+      key: 'stock',
+      header: 'Stock',
+      render: (item) => (
+        <>
+          {item.sellableQuantity} sellable
+          <br />
+          <span className="mutedText">{item.onHandQuantity} on hand</span>
+        </>
+      ),
+    },
+    {
+      key: 'expiry',
+      header: 'Expiry',
+      render: (item) => (
+        <>
+          {formatDateTime(item.batch.expiryDate)}
+          <br />
+          <span className="mutedText">{formatDaysUntilExpiry(item.daysUntilExpiry)}</span>
+        </>
+      ),
+    },
+    {
+      key: 'age',
+      header: 'Age',
+      render: (item) => (
+        <>
+          {item.ageInDays} days
+          <br />
+          <span className="mutedText">{labelFromCode(item.stockAgeBucket)}</span>
+        </>
+      ),
+    },
+    {
+      key: 'alert',
+      header: 'Alert',
+      render: (item) => (
+        <StatusBadge
+          label={labelFromCode(item.ageingBucket)}
+          tone={ageingTone(item.ageingBucket)}
+        />
+      ),
+    },
+  ];
 
   return (
-    <div className="tableShell">
-      <table>
-        <thead>
-          <tr>
-            <th>Batch</th>
-            <th>Product</th>
-            <th>Warehouse</th>
-            <th>Stock</th>
-            <th>Expiry</th>
-            <th>Age</th>
-            <th>Alert</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.batch.id}>
-              <td>
-                {item.batch.batchNumber}
-                <br />
-                <span className="mutedText">
-                  {item.distributorOrganisation?.displayName ?? 'Distributor'}
-                </span>
-              </td>
-              <td>
-                {item.product.name}
-                <br />
-                <span className="mutedText">{item.variant.variantName}</span>
-              </td>
-              <td>{item.warehouse?.name ?? 'Not recorded'}</td>
-              <td>
-                {item.sellableQuantity} sellable
-                <br />
-                <span className="mutedText">{item.onHandQuantity} on hand</span>
-              </td>
-              <td>
-                {formatDateTime(item.batch.expiryDate)}
-                <br />
-                <span className="mutedText">{formatDaysUntilExpiry(item.daysUntilExpiry)}</span>
-              </td>
-              <td>
-                {item.ageInDays} days
-                <br />
-                <span className="mutedText">{labelFromCode(item.stockAgeBucket)}</span>
-              </td>
-              <td>
-                <span className={`statusBadge ${ageingTone(item.ageingBucket)}`}>
-                  {labelFromCode(item.ageingBucket)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      caption="Inventory ageing report"
+      columns={columns}
+      emptyDescription="Inventory rows matching the current report filters will appear here."
+      emptyTitle="No inventory rows"
+      rowKey={(item) => item.batch.id}
+      rows={items}
+    />
   );
 }
 
@@ -219,6 +263,7 @@ function buildAgeingHref(
   view: AgeingView,
   lowStockThreshold: number | undefined,
   expiringWithinDays: number | undefined,
+  page: number,
 ): string {
   const params = new URLSearchParams({ view });
   if (lowStockThreshold !== undefined) {
@@ -227,11 +272,14 @@ function buildAgeingHref(
   if (expiringWithinDays !== undefined) {
     params.set('expiringWithinDays', String(expiringWithinDays));
   }
+  if (page > 1) {
+    params.set('page', String(page));
+  }
 
   return `/inventory/ageing?${params.toString()}`;
 }
 
-function ageingTone(bucket: string) {
+function ageingTone(bucket: InventoryAgeingBucket): 'ok' | 'warn' | 'danger' {
   if (bucket === 'HEALTHY') {
     return 'ok';
   }
@@ -239,6 +287,11 @@ function ageingTone(bucket: string) {
     return 'danger';
   }
   return 'warn';
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function formatDaysUntilExpiry(value?: number | null): string {

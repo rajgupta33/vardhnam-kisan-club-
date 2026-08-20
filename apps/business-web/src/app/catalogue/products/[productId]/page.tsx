@@ -1,6 +1,17 @@
 import Link from 'next/link';
-import type { ProductDetail, ProductDocument, ProductVariant } from '@vardhnam/api-client';
+import type {
+  AuditLog,
+  CatalogueStatus,
+  ProductDetail,
+  ProductDocument,
+  ProductVariant,
+} from '@vardhnam/api-client';
 import { BusinessShell } from '../../../../components/business-shell';
+import { ConfirmSubmitButton } from '../../../../components/confirm-submit-button';
+import { DataTable, type DataTableColumn } from '../../../../components/data-table';
+import { EmptyState } from '../../../../components/empty-state';
+import { Pagination } from '../../../../components/pagination';
+import { StatusBadge } from '../../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../../lib/format';
 import { loadAuditLogs, loadProductDetail } from '../../../../lib/marketplace-api';
 import { reviewProductAction } from '../../actions';
@@ -8,6 +19,7 @@ import { reviewProductAction } from '../../actions';
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Record<string, string | string[] | undefined>;
+const auditLimit = 10;
 
 interface ProductDetailPageProps {
   params: Promise<{ productId: string }>;
@@ -17,19 +29,28 @@ interface ProductDetailPageProps {
 export default async function ProductDetailPage({ params, searchParams }: ProductDetailPageProps) {
   const { productId } = await params;
   const resolvedSearchParams = (await searchParams) ?? {};
+  const auditPage = parsePage(readParam(resolvedSearchParams.auditPage));
   const productResult = await loadProductDetail(productId);
   const auditResult = productResult.ok
     ? await loadAuditLogs({
         organisationId: productResult.data.companyOrganisationId,
-        page: 1,
-        limit: 10,
+        page: auditPage,
+        limit: auditLimit,
       })
     : undefined;
   const notice = readParam(resolvedSearchParams.notice);
   const error = readParam(resolvedSearchParams.error);
+  const auditEntries = auditResult?.ok ? auditResult.data.items : [];
+  const auditTotal = auditResult?.ok ? auditResult.data.total : 0;
+  const auditColumns: DataTableColumn<AuditLog>[] = [
+    { key: 'time', header: 'Time', render: (entry) => formatDateTime(entry.createdAt) },
+    { key: 'action', header: 'Action', render: (entry) => labelFromCode(entry.action) },
+    { key: 'resource', header: 'Resource', render: (entry) => entry.resourceType },
+    { key: 'reason', header: 'Reason', render: (entry) => entry.reason ?? 'Not recorded' },
+  ];
   const statuses = [
     {
-      label: productResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: productResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: productResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -64,16 +85,17 @@ export default async function ProductDetailPage({ params, searchParams }: Produc
       {error ? <p className="noticeBanner danger">{error}</p> : null}
 
       {!productResult.ok ? (
-        <section className="emptyState">
-          <h3>Product Detail Unavailable</h3>
-          <p className="mutedText">{productResult.error}</p>
-        </section>
+        <EmptyState description={productResult.error} title="Product Detail Unavailable" />
       ) : (
         <ProductWorkspace product={productResult.data} />
       )}
 
       {auditResult ? (
-        <section className="auditPreview" aria-label="Catalogue audit history">
+        <section
+          className="auditPreview"
+          id="catalogue-audit-history"
+          aria-label="Catalogue audit history"
+        >
           <div className="sectionHeader">
             <div>
               <p className="eyebrow">Audit</p>
@@ -81,30 +103,24 @@ export default async function ProductDetailPage({ params, searchParams }: Produc
             </div>
           </div>
           {!auditResult.ok ? (
-            <p className="mutedText">{auditResult.error}</p>
+            <EmptyState description={auditResult.error} title="Catalogue history is unavailable" />
           ) : (
-            <div className="tableShell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Resource</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditResult.data.items.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{formatDateTime(entry.createdAt)}</td>
-                      <td>{labelFromCode(entry.action)}</td>
-                      <td>{entry.resourceType}</td>
-                      <td>{entry.reason ?? 'Not recorded'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <DataTable
+                caption="Company catalogue audit history"
+                columns={auditColumns}
+                emptyDescription="Catalogue review events will appear here."
+                emptyTitle="No catalogue history"
+                rowKey={(entry) => entry.id}
+                rows={auditEntries}
+              />
+              <Pagination
+                buildHref={(targetPage) => buildProductHref(productId, targetPage)}
+                limit={auditLimit}
+                page={auditPage}
+                total={auditTotal}
+              />
+            </>
           )}
         </section>
       ) : null}
@@ -123,9 +139,10 @@ function ProductWorkspace({ product }: { product: ProductDetail }) {
             <p className="eyebrow">{product.brand.name}</p>
             <h3>{product.name}</h3>
           </div>
-          <span className={`statusBadge ${product.status === 'APPROVED' ? 'ok' : 'warn'}`}>
-            {labelFromCode(product.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(product.status)}
+            tone={catalogueStatusTone(product.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Company" value={product.companyOrganisation?.displayName} />
@@ -147,12 +164,14 @@ function ProductWorkspace({ product }: { product: ProductDetail }) {
         </div>
         <div className="requirementList stacked">
           {ready ? (
-            <span className="statusBadge ok">Ready for approval</span>
+            <StatusBadge label="Ready for approval" tone="ok" />
           ) : (
             product.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
+              <StatusBadge
+                key={requirement}
+                label={`Missing ${labelFromCode(requirement)}`}
+                tone="warn"
+              />
             ))
           )}
         </div>
@@ -166,38 +185,38 @@ function ProductWorkspace({ product }: { product: ProductDetail }) {
 }
 
 function VariantPanel({ variants }: { variants: ProductVariant[] }) {
+  const columns: DataTableColumn<ProductVariant>[] = [
+    { key: 'variant', header: 'Variant', render: (variant) => variant.variantName },
+    {
+      key: 'pack',
+      header: 'Pack',
+      render: (variant) => `${variant.packSize} ${variant.packUnit}`,
+    },
+    { key: 'mrp', header: 'MRP', render: (variant) => formatPaise(variant.mrpPaise) },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (variant) => (
+        <StatusBadge
+          label={variant.isActive ? 'Active' : 'Inactive'}
+          tone={variant.isActive ? 'ok' : 'warn'}
+        />
+      ),
+    },
+  ];
+
   return (
     <section className="panel">
       <p className="eyebrow">Variants</p>
       <h3>Pack Sizes</h3>
-      {variants.length === 0 ? (
-        <p className="mutedText">No pack sizes recorded.</p>
-      ) : (
-        <div className="tableShell">
-          <table>
-            <thead>
-              <tr>
-                <th>Variant</th>
-                <th>Pack</th>
-                <th>MRP</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {variants.map((variant) => (
-                <tr key={variant.id}>
-                  <td>{variant.variantName}</td>
-                  <td>
-                    {variant.packSize} {variant.packUnit}
-                  </td>
-                  <td>{formatPaise(variant.mrpPaise)}</td>
-                  <td>{variant.isActive ? 'Active' : 'Inactive'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <DataTable
+        caption="Product pack sizes"
+        columns={columns}
+        emptyDescription="Product variants will appear here when recorded."
+        emptyTitle="No pack sizes recorded"
+        rowKey={(variant) => variant.id}
+        rows={variants}
+      />
     </section>
   );
 }
@@ -208,7 +227,10 @@ function DocumentPanel({ documents }: { documents: ProductDocument[] }) {
       <p className="eyebrow">Documents</p>
       <h3>Product Document Metadata</h3>
       {documents.length === 0 ? (
-        <p className="mutedText">No document metadata recorded.</p>
+        <EmptyState
+          description="Product document metadata will appear here when recorded."
+          title="No document metadata recorded"
+        />
       ) : (
         <div className="documentList">
           {documents.map((document) => (
@@ -248,9 +270,12 @@ function ProductReviewPanel({ product, ready }: { product: ProductDetail; ready:
           <input name="productId" type="hidden" value={product.id} />
           <input name="decision" type="hidden" value="APPROVE" />
           <input name="reason" type="hidden" value="Master product metadata verified." />
-          <button className="primaryButton" disabled={!ready || !reviewable} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Approve this product master for publication?"
+            disabled={!ready || !reviewable}
+          >
             Approve Product
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={reviewProductAction} className="decisionForm">
           <input name="productId" type="hidden" value={product.id} />
@@ -263,9 +288,13 @@ function ProductReviewPanel({ product, ready }: { product: ProductDetail; ready:
             placeholder="Rejection reason"
             required
           />
-          <button className="dangerButton" disabled={!reviewable} type="submit">
+          <ConfirmSubmitButton
+            className="dangerButton"
+            confirmMessage="Reject this product master with the recorded reason?"
+            disabled={!reviewable}
+          >
             Reject Product
-          </button>
+          </ConfirmSubmitButton>
         </form>
       </div>
     </section>
@@ -294,6 +323,24 @@ function formatPaise(value?: number | null): string {
     return 'Not recorded';
   }
   return `${value.toLocaleString('en-IN')} paise`;
+}
+
+function buildProductHref(productId: string, auditPage: number): string {
+  const params = new URLSearchParams();
+  if (auditPage > 1) params.set('auditPage', String(auditPage));
+  const query = params.toString();
+  return `/catalogue/products/${productId}${query ? `?${query}` : ''}#catalogue-audit-history`;
+}
+
+function catalogueStatusTone(status: CatalogueStatus): 'ok' | 'warn' | 'danger' {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED' || status === 'ARCHIVED') return 'danger';
+  return 'warn';
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function readParam(value: string | string[] | undefined): string | undefined {

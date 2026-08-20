@@ -25,16 +25,21 @@ yarn-error.log*
 # Prisma
 apps/marketplace-api/prisma/dev.db
 
+# Local object storage (STORAGE_PROVIDER=local)
+.storage/
+
 # Flutter
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 pubspec.lock
+!apps/farmer-mobile/pubspec.lock
 **/build/
 
 # IDE
 .idea/
 .vscode/
+.claude/*.lock
 
 # OS
 Thumbs.db

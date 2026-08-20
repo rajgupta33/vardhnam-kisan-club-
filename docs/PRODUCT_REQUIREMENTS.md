@@ -199,7 +199,7 @@ Phase 3C uses a backend mock payment intent instead of a real provider. Creating
 
 The distributor is normally the seller of record and invoices the farmer. Vardhnam marketplace charges, fulfilment charges and commissions must be represented separately from the distributor invoice.
 
-Phase 4C implements basic product invoice generation for packed child product orders. Each child order may have one invoice snapshot containing distributor seller details, farmer name, delivery address, item lines, reservation batch references and backend-calculated paise totals. Phase 4C does not implement invoice PDFs, GST breakup rules, dispatch, delivery assignments, refunds, settlements, finance ledger posting or Tally sync.
+Phase 4C implements basic product invoice generation for packed child product orders. WP-15A extends it with active-variant HSN/GST metadata, immutable checkout-time tax snapshots, verified seller and place-of-supply state inputs, tax-inclusive CGST/SGST or IGST extraction in integer paise, and a transactional sequential number per distributor and Indian financial year. Each child order may have one immutable invoice snapshot containing those tax fields plus distributor seller details, farmer name, delivery address, item lines and reservation batch references. The implementation remains sandbox-only until chartered-accountant approval and does not yet implement invoice PDFs, credit notes, dispatch, delivery assignments, refunds, settlements or Tally sync.
 
 ## 15. Fulfilment and Delivery
 
@@ -208,6 +208,12 @@ Fulfilment may be distributor-led, Vardhnam-assisted or delivery-partner execute
 Phase 4D implements dispatch readiness for packed child product orders that already have a generated invoice. Dispatch readiness creates one dispatch snapshot, moves the child order to `READY_FOR_PICKUP`, and does not assign delivery partners, create delivery OTPs, send notifications, post finance ledger entries, settle parties, refund payments or write Tally data.
 
 Phase 4E implements local/mock delivery assignment and OTP completion for ready-for-pickup child product orders. It creates one delivery assignment snapshot, stores only OTP hash/salt metadata, moves assigned deliveries through `OUT_FOR_DELIVERY` to `DELIVERED`, and exposes a transient mock OTP in the assignment response for development. Phase 4E does not send real SMS/WhatsApp messages, capture geotagged proof, calculate delivery payouts, post finance ledger entries, settle parties, refund payments or write Tally data.
+
+The later WP-12 delivery slice adds permission-aware foreground location proof at OTP completion. Granted location records coordinates, device accuracy and capture time; denied or unavailable location is recorded explicitly and does not block OTP completion. Photo proof remains deferred until authorised private file storage is available.
+
+WP-12 also makes `DELIVERY_FAILED` reachable through controlled reason codes and backend-owned retry scheduling. Only the assigned partner or authorised operations actor may record failure or start a due retry; each retry issues a fresh hashed delivery OTP and retains order history and audit evidence.
+
+WP-12 return pickup uses a separate assignment lifecycle. Operations assigns an approved return to an active, online delivery partner; the assigned partner accepts or reason-rejects it and records collection. Collection atomically moves the return and seller child order to their in-transit states with history, audit and farmer notification. Partner access is own-scoped and does not expose another partner's return work.
 
 ## 16. Promoter and Sales Attribution
 
@@ -238,6 +244,8 @@ Support tickets must connect users, orders or bookings, categories, priority, ev
 ## 22. Reporting and Dashboards
 
 Dashboards must cover Vardhnam, company, distributor and partner views. Operational action lists are more important than decorative charts. Exports must be permission-controlled and high-risk exports must be logged.
+
+Kisan Club pilot intelligence must provide permission-protected aggregate acreage by crop and district, crop-cycle status and sowing-window distribution, plus current promoter capacity and coordination-outcome indicators. It must not expose farmer identities or precise farm coordinates. Demand forecasting must remain explicitly unavailable until sufficient completed-season conversion history exists.
 
 ## 23. Tally Integration
 
@@ -287,3 +295,13 @@ Phase 7: notification providers, payment provider sandbox, Tally export/sync abs
 ## 28. MVP Acceptance Scenario
 
 The MVP is successful when an administrator approves a company and distributor, the company submits a product, the administrator approves it, the distributor creates a warehouse and batch inventory, activates an offer, a promoter registers a farmer, the farmer logs in, sees the product for their pincode, adds it to cart, the system assigns the distributor, the farmer completes mock payment, inventory is reserved, the distributor accepts and packs the order, an invoice is generated, a delivery partner receives and completes the assignment through OTP, the order becomes delivered, distributor payable and marketplace commission are calculated, promoter commission becomes provisional, the return window is completed, commission and settlement become eligible, and important actions are visible in the audit log.
+
+## 29. Kisan Club
+
+Kisan Club is a free programme inside the existing marketplace, not a separate marketplace or subscription. A farmer explicitly accepts a versioned terms document to join. Advisory, marketing and precise-location consent are independent and optional; declining any of them must not block membership. Membership begins as `PENDING_PROFILE` and uses a non-sequential display member number while all API resource access uses UUIDs. A platform kill switch hides all Club routes with a not-found response when the programme is disabled.
+
+Club farmers may maintain farmer-owned farms, controlled-reference crop cycles and an append-only activity diary. Precise farm coordinates require explicit location consent. An actively assigned promoter may submit the same validated survey on the farmer's behalf. Completing the first crop cycle advances the member to `AWAITING_PROMOTER`. Eligible local promoters are assigned through an explainable deterministic matcher or an audited operations choice; assignment activates the membership and drives the existing single promoter-attribution record.
+
+The Club catalogue contains deliberately enrolled, approved Vardhnam-owned products with optional regional, variant and availability-window scope. Discovery continues to show current approved distributor offers and stock; programme enrolment never changes the seller or invoice issuer. Active members receive backend-evaluated, usage-limited Club benefits where an active rule matches. Vardhnam funds the benefit separately: the distributor's gross goods value, invoice basis, payable basis and marketplace-commission basis do not shrink. Cart estimates are non-binding; checkout re-evaluates and records the final redemption, farmer payable and subsidy ledger movement atomically.
+
+After successful payment, each eligible Club child order with an active member-promoter relationship receives a promoter coordination assignment. Its lifecycle is independent from the legal product order and delivery proof. Promoters may acknowledge, coordinate readiness and farmer contact, and report completion or failure; operations may explicitly reassign or cancel. Physical delivery, OTP proof and delivery earnings remain in the existing authorised delivery-partner workflow. Advisory remains a later additive work package.

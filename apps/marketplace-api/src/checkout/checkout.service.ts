@@ -9,7 +9,10 @@ import {
 import {
   CartStatus,
   CatalogueStatus,
+  DeliveryFailureReasonCode,
+  DeliveryProofLocationStatus,
   DistributorOfferStatus,
+  DeliveryPartnerAvailabilityStatus,
   IdempotencyStatus,
   InventoryBatchStatus,
   InventoryMovementType,
@@ -45,6 +48,17 @@ import type { CurrentUser } from '../auth/current-user.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
 import { FinanceService } from '../finance/finance.service';
+import {
+  KisanClubBenefitService,
+  type KisanClubBenefitEvaluation,
+} from '../kisan-club/benefits/kisan-club-benefit.service';
+import { KisanClubBenefitTokenService } from '../kisan-club/benefits/kisan-club-benefit-token.service';
+import type { RedeemKisanClubBenefitTokenDto } from '../kisan-club/dto/redeem-kisan-club-benefit-token.dto';
+import {
+  FarmerOrderNotificationEvent,
+  NotificationEventsService,
+} from '../notifications/notification-events.service';
+import { OtpSenderService } from '../notifications/otp-sender.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AssignDeliveryDto } from './dto/assign-delivery.dto';
 import type { CancelOrderDto } from './dto/cancel-order.dto';
@@ -54,6 +68,14 @@ import type { FulfilmentOrderDecisionDto } from './dto/fulfilment-order-decision
 import type { GenerateProductInvoiceDto } from './dto/generate-product-invoice.dto';
 import type { ListFulfilmentOrdersQueryDto } from './dto/list-fulfilment-orders-query.dto';
 import type { ListMyOrdersQueryDto } from './dto/list-my-orders-query.dto';
+import type { ReportDeliveryFailureDto } from './dto/report-delivery-failure.dto';
+import type { RetryDeliveryDto } from './dto/retry-delivery.dto';
+import type { VerifyPackagePickupDto } from './dto/verify-package-pickup.dto';
+import {
+  calculateInclusiveInvoiceTax,
+  indianFinancialYear,
+  type InvoiceTaxLine,
+} from './invoice-tax';
 
 const checkoutCartInclude = Prisma.validator<Prisma.CartInclude>()({
   deliveryAddress: true,
@@ -125,12 +147,15 @@ type CheckoutClient = PrismaService | Prisma.TransactionClient;
 
 const DELIVERY_OTP_EXPIRY_HOURS = 24;
 const DELIVERY_OTP_MAX_ATTEMPTS = 5;
+const DELIVERY_RETRY_MAX_DAYS = 7;
 
 interface PreparedCheckoutItem {
   cartItem: CartItem;
   offer: CheckoutOffer;
   unitPricePaise: number;
   lineTotalPaise: number;
+  clubBenefit: KisanClubBenefitEvaluation | null;
+  clubProgrammeEligible: boolean;
 }
 
 interface IdempotencyInput {
@@ -148,7 +173,52 @@ export class CheckoutService {
     private readonly auditService: AuditService,
     private readonly accessService: AccessService,
     private readonly financeService: FinanceService,
+    private readonly notificationEventsService: NotificationEventsService,
+    private readonly otpSender: OtpSenderService,
+    private readonly kisanClubBenefitService?: KisanClubBenefitService,
+    private readonly kisanClubBenefitTokenService?: KisanClubBenefitTokenService,
   ) {}
+
+  async checkoutAssistedToken(
+    dto: RedeemKisanClubBenefitTokenDto,
+    actor: CurrentUser,
+    idempotencyKey?: string,
+    requestId?: string,
+  ) {
+    if (
+      !this.accessService.hasPermission(actor, PermissionCode.KISAN_CLUB_ASSISTED_ORDERS_CREATE)
+    ) {
+      throw new ForbiddenException({
+        code: ApiErrorCode.FORBIDDEN,
+        message: 'Kisan Club assisted-order permission is required',
+      });
+    }
+    const key = this.normalizedIdempotencyKey(idempotencyKey, 'assisted checkout');
+    return this.runIdempotent(
+      {
+        scope: `kisan-club:assisted-checkout:${actor.userId}`,
+        key,
+        requestHash: this.hashRequest({ actorUserId: actor.userId, dto }),
+        differentRequestMessage:
+          'Idempotency key was already used for a different assisted checkout request',
+        inProgressMessage: 'Assisted checkout request is already in progress',
+      },
+      async () => {
+        if (!this.kisanClubBenefitTokenService) {
+          throw new ConflictException({
+            code: ApiErrorCode.CONFLICT,
+            message: 'Kisan Club benefit tokens are unavailable',
+          });
+        }
+        const tokenId = await this.kisanClubBenefitTokenService.authorizeRedemption(
+          dto,
+          actor,
+          requestId,
+        );
+        return this.createAssistedCheckout(tokenId, dto, actor, requestId);
+      },
+    );
+  }
 
   async checkoutFromCart(
     dto: CheckoutFromCartDto,
@@ -408,6 +478,13 @@ export class CheckoutService {
           order.sellerOrganisationId,
         );
         const farmer = await this.findFarmerProfileByIdOrThrow(tx, order.farmerProfileId);
+        const sellerStateCode = this.verifiedSellerStateCode(seller);
+        const sellerAddressSnapshot = await this.invoiceSellerAddress(tx, seller.id);
+        const placeOfSupplyStateCode = this.invoicePlaceOfSupplyStateCode(order);
+        const tax = this.invoiceTaxCalculation(order, sellerStateCode, placeOfSupplyStateCode);
+        const generatedAt = new Date();
+        const financialYear = indianFinancialYear(generatedAt);
+        const sequenceNumber = await this.nextInvoiceSequence(tx, seller.id, financialYear);
         let invoice: ProductInvoice;
         try {
           invoice = await tx.productInvoice.create({
@@ -416,21 +493,31 @@ export class CheckoutService {
               checkoutId: order.checkoutId,
               farmerProfileId: order.farmerProfileId,
               sellerOrganisationId: order.sellerOrganisationId,
-              invoiceNumber: this.generateInvoiceNumber(),
+              invoiceNumber: this.formatInvoiceNumber(seller.id, financialYear, sequenceNumber),
               status: ProductInvoiceStatus.GENERATED,
               currency: 'INR',
               subtotalPaise: order.subtotalPaise,
-              taxPaise: 0,
-              totalPaise: order.subtotalPaise,
+              taxableAmountPaise: tax.taxableAmountPaise,
+              taxPaise: tax.taxPaise,
+              cgstPaise: tax.cgstPaise,
+              sgstPaise: tax.sgstPaise,
+              igstPaise: tax.igstPaise,
+              totalPaise: tax.totalPaise,
               itemCount: order.itemCount,
               sellerLegalNameSnapshot: seller.legalName,
               sellerDisplayNameSnapshot: seller.displayName,
               sellerGstinSnapshot: seller.gstin,
+              sellerStateCodeSnapshot: sellerStateCode,
+              sellerAddressSnapshot,
+              placeOfSupplyStateCode,
+              financialYear,
+              sequenceNumber,
               farmerNameSnapshot: farmer.fullName,
               deliveryAddressSnapshot: this.toJsonValue(order.deliveryAddressSnapshot),
-              lineItemsSnapshot: this.invoiceLineItemsSnapshot(order),
+              lineItemsSnapshot: this.invoiceLineItemsSnapshot(order, tax.lines),
               generatedByUserId: actor.userId,
               generatedByRole: actor.role,
+              generatedAt,
             },
           });
         } catch (error) {
@@ -453,6 +540,17 @@ export class CheckoutService {
           }),
           tx,
         );
+
+        await this.notificationEventsService.emitOrderEvent(tx, {
+          event: FarmerOrderNotificationEvent.INVOICE_GENERATED,
+          farmerProfileId: order.farmerProfileId,
+          productOrderId: order.id,
+          orderNumber: order.orderNumber,
+          actorUserId: actor.userId,
+          actorRole: actor.role,
+          requestId,
+          invoiceId: invoice.id,
+        });
 
         const savedOrder = await this.findFulfilmentOrderOrThrow(tx, order.id, actor, 'read');
         return this.toOrderDetail(savedOrder);
@@ -554,6 +652,14 @@ export class CheckoutService {
           tx,
         );
 
+        await this.emitOrderStatusNotification(
+          tx,
+          order,
+          FarmerOrderNotificationEvent.ORDER_READY_FOR_PICKUP,
+          actor,
+          requestId,
+        );
+
         const savedOrder = await this.findFulfilmentOrderOrThrow(tx, order.id, actor, 'read');
         return this.toOrderDetail(savedOrder);
       },
@@ -635,11 +741,59 @@ export class CheckoutService {
         );
 
         const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
-        return this.toOrderDetail(savedOrder, { mockDeliveryOtpCode: otp.code });
+        return this.toOrderDetail(savedOrder, this.mockDeliveryOtp(otp.code));
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       },
+    );
+  }
+
+  async issueDispatchPackageLabel(
+    orderId: string,
+    dto: FulfilmentOrderDecisionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const reason = this.fulfilmentDecisionReason(
+      dto,
+      'Package QR label issued for pickup verification',
+      false,
+    );
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findFulfilmentOrderOrThrow(tx, orderId, actor, 'manage');
+        const dispatch = this.ensureDispatchLabelCanBeIssued(order);
+        const packageQrCode = `VARDHNAM-PICKUP:${dispatch.id}:${randomUUID()}`;
+        const updatedDispatch = await tx.productDispatch.update({
+          where: { id: dispatch.id },
+          data: {
+            packageQrHash: this.hashPackageQrCode(packageQrCode),
+            packageQrIssuedAt: new Date(),
+            packageQrIssuedByUserId: actor.userId,
+          },
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: dispatch.packageQrIssuedAt
+              ? 'PRODUCT_DISPATCH_PACKAGE_QR_REISSUED'
+              : 'PRODUCT_DISPATCH_PACKAGE_QR_ISSUED',
+            resourceType: 'ProductDispatch',
+            resourceId: updatedDispatch.id,
+            organisationId: updatedDispatch.sellerOrganisationId,
+            previousValue: this.productDispatchAuditValue(dispatch),
+            newValue: this.productDispatchAuditValue(updatedDispatch),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+        return {
+          dispatch: this.toDispatchDetail(updatedDispatch),
+          packageQrCode,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
 
@@ -658,8 +812,9 @@ export class CheckoutService {
     return this.prisma.$transaction(
       async (tx) => {
         const order = await this.findProductOrderDetailOrThrow(tx, orderId);
-        const assignment = this.ensureOutForDeliveryAllowed(order);
+        const assignment = this.requireDeliveryAssignment(order);
         this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        this.ensureOutForDeliveryAllowed(order);
 
         const updatedAssignment = await tx.productDeliveryAssignment.update({
           where: { id: assignment.id },
@@ -712,12 +867,209 @@ export class CheckoutService {
           tx,
         );
 
+        await this.emitOrderStatusNotification(
+          tx,
+          order,
+          FarmerOrderNotificationEvent.ORDER_OUT_FOR_DELIVERY,
+          actor,
+          requestId,
+        );
+
         const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
         return this.toOrderDetail(savedOrder);
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       },
+    );
+  }
+
+  async verifyDeliveryPackagePickup(
+    orderId: string,
+    dto: VerifyPackagePickupDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findProductOrderDetailOrThrow(tx, orderId);
+        const assignment = this.requireDeliveryAssignment(order);
+        this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        const dispatch = this.ensurePackagePickupCanBeVerified(order);
+        if (this.hashPackageQrCode(dto.packageQrCode.trim()) !== dispatch.packageQrHash) {
+          await this.recordFailedPackagePickupVerification(assignment, actor, requestId);
+          throw new BadRequestException({
+            code: ApiErrorCode.VALIDATION_FAILED,
+            message: 'Package QR code is invalid',
+          });
+        }
+        const verifiedAt = new Date();
+        const updatedAssignment = await tx.productDeliveryAssignment.update({
+          where: { id: assignment.id },
+          data: {
+            pickupVerifiedAt: verifiedAt,
+            pickupVerifiedByUserId: actor.userId,
+            pickupVerifiedByRole: actor.role,
+          },
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_DELIVERY_PACKAGE_PICKUP_VERIFIED',
+            resourceType: 'ProductDeliveryAssignment',
+            resourceId: updatedAssignment.id,
+            organisationId: updatedAssignment.sellerOrganisationId,
+            previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+            newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+            requestId,
+            reason: 'Package QR verified at pickup',
+          }),
+          tx,
+        );
+        const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
+        return this.toOrderDetail(savedOrder);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async acceptDeliveryAssignment(
+    orderId: string,
+    dto: FulfilmentOrderDecisionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const reason = this.fulfilmentDecisionReason(
+      dto,
+      'Delivery assignment accepted by delivery partner',
+      false,
+    );
+    return this.respondToDeliveryAssignment(orderId, actor, true, reason, requestId);
+  }
+
+  async rejectDeliveryAssignment(
+    orderId: string,
+    dto: FulfilmentOrderDecisionDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const reason = this.deliveryAssignmentRejectionReason(dto);
+    return this.respondToDeliveryAssignment(orderId, actor, false, reason, requestId);
+  }
+
+  async reassignDeliveryAssignment(
+    orderId: string,
+    dto: AssignDeliveryDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    this.ensureDeliveryAssignmentManageAny(actor);
+    const reason = this.deliveryAssignmentReassignmentReason(dto);
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findProductOrderDetailOrThrow(tx, orderId);
+        const assignment = this.ensureDeliveryReassignmentAllowed(order);
+        if (assignment.deliveryPartnerUserId === dto.deliveryPartnerUserId) {
+          throw new BadRequestException({
+            code: ApiErrorCode.VALIDATION_FAILED,
+            message: 'Rejected delivery must be reassigned to a different delivery partner',
+          });
+        }
+        const deliveryPartner = await this.findActiveDeliveryPartnerOrThrow(
+          tx,
+          dto.deliveryPartnerUserId,
+        );
+        const otp = this.generateDeliveryOtp();
+        const updatedAssignment = await tx.productDeliveryAssignment.update({
+          where: { id: assignment.id },
+          data: {
+            deliveryPartnerUserId: deliveryPartner.id,
+            status: ProductDeliveryAssignmentStatus.ASSIGNED,
+            otpHash: otp.hash,
+            otpSalt: otp.salt,
+            otpExpiresAt: this.hoursFromNow(DELIVERY_OTP_EXPIRY_HOURS),
+            otpAttemptCount: 0,
+            otpVerifiedAt: null,
+            pickupVerificationAttemptCount: 0,
+            pickupVerifiedAt: null,
+            pickupVerifiedByUserId: null,
+            pickupVerifiedByRole: null,
+            assignedByUserId: actor.userId,
+            assignedByRole: actor.role,
+            assignedAt: new Date(),
+            startedByUserId: null,
+            startedByRole: null,
+            startedAt: null,
+            completedByUserId: null,
+            completedByRole: null,
+            completedAt: null,
+            deliveryProofNote: null,
+            proofLocationStatus: null,
+            proofLatitude: null,
+            proofLongitude: null,
+            proofAccuracyMetres: null,
+            proofLocationCapturedAt: null,
+          },
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_DELIVERY_REASSIGNED',
+            resourceType: 'ProductDeliveryAssignment',
+            resourceId: updatedAssignment.id,
+            organisationId: updatedAssignment.sellerOrganisationId,
+            previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+            newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+        const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
+        return this.toOrderDetail(savedOrder, this.mockDeliveryOtp(otp.code));
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  private async respondToDeliveryAssignment(
+    orderId: string,
+    actor: CurrentUser,
+    accepted: boolean,
+    reason: string,
+    requestId?: string,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findProductOrderDetailOrThrow(tx, orderId);
+        const assignment = this.requireDeliveryAssignment(order);
+        this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        this.ensureDeliveryAssignmentResponseAllowed(order);
+        const status = accepted
+          ? ProductDeliveryAssignmentStatus.ACCEPTED
+          : ProductDeliveryAssignmentStatus.REJECTED;
+        const updatedAssignment = await tx.productDeliveryAssignment.update({
+          where: { id: assignment.id },
+          data: { status },
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: accepted
+              ? 'PRODUCT_DELIVERY_ASSIGNMENT_ACCEPTED'
+              : 'PRODUCT_DELIVERY_ASSIGNMENT_REJECTED',
+            resourceType: 'ProductDeliveryAssignment',
+            resourceId: updatedAssignment.id,
+            organisationId: updatedAssignment.sellerOrganisationId,
+            previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+            newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+        const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
+        return this.toOrderDetail(savedOrder);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
 
@@ -728,12 +1080,14 @@ export class CheckoutService {
     requestId?: string,
   ) {
     const reason = dto.proofNote?.trim() || 'Delivery completed after OTP verification';
+    const locationProof = this.validateDeliveryLocationProof(dto);
 
     return this.prisma.$transaction(
       async (tx) => {
         const order = await this.findProductOrderDetailOrThrow(tx, orderId);
-        const assignment = this.ensureDeliveryCompletionAllowed(order);
+        const assignment = this.requireDeliveryAssignment(order);
         this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        this.ensureDeliveryCompletionAllowed(order);
         await this.verifyDeliveryOtpOrThrow(assignment, dto.otpCode, actor, requestId);
 
         const completedAt = new Date();
@@ -746,6 +1100,11 @@ export class CheckoutService {
             completedByRole: actor.role,
             completedAt,
             deliveryProofNote: reason,
+            proofLocationStatus: dto.proofLocationStatus,
+            proofLatitude: locationProof?.latitude ?? null,
+            proofLongitude: locationProof?.longitude ?? null,
+            proofAccuracyMetres: locationProof?.accuracyMetres ?? null,
+            proofLocationCapturedAt: locationProof?.capturedAt ?? null,
           },
         });
         const updatedOrder = await tx.productOrder.update({
@@ -798,12 +1157,174 @@ export class CheckoutService {
           requestId,
         );
 
+        await this.emitOrderStatusNotification(
+          tx,
+          order,
+          FarmerOrderNotificationEvent.ORDER_DELIVERED,
+          actor,
+          requestId,
+        );
+
         const savedOrder = await this.findProductOrderDetailOrThrow(tx, order.id);
         return this.toOrderDetail(savedOrder);
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       },
+    );
+  }
+
+  async reportDeliveryFailure(
+    orderId: string,
+    dto: ReportDeliveryFailureDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const retryScheduledAt = this.validateDeliveryRetryTime(dto.retryAt);
+    const note = dto.note?.trim() || null;
+    const reason = this.deliveryFailureReason(dto.reasonCode, note);
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findProductOrderDetailOrThrow(tx, orderId);
+        const assignment = this.requireDeliveryAssignment(order);
+        this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        this.ensureDeliveryFailureAllowed(order);
+        const failedAt = new Date();
+
+        const updatedAssignment = await tx.productDeliveryAssignment.update({
+          where: { id: assignment.id },
+          data: {
+            status: ProductDeliveryAssignmentStatus.DELIVERY_FAILED,
+            failureAttemptCount: { increment: 1 },
+            lastFailureReasonCode: dto.reasonCode,
+            lastFailureNote: note,
+            lastFailedAt: failedAt,
+            lastFailedByUserId: actor.userId,
+            lastFailedByRole: actor.role,
+            retryScheduledAt,
+          },
+        });
+        const updatedOrder = await tx.productOrder.update({
+          where: { id: order.id },
+          data: { status: ProductOrderStatus.DELIVERY_FAILED },
+        });
+
+        await this.recordStatusHistory(tx, {
+          order: updatedOrder,
+          actor,
+          fromStatus: order.status,
+          toStatus: ProductOrderStatus.DELIVERY_FAILED,
+          requestId,
+          reason,
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_ORDER_DELIVERY_FAILED',
+            resourceType: 'ProductOrder',
+            resourceId: updatedOrder.id,
+            organisationId: updatedOrder.sellerOrganisationId,
+            previousValue: this.productOrderAuditValue(order),
+            newValue: this.productOrderAuditValue(updatedOrder),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_DELIVERY_FAILED',
+            resourceType: 'ProductDeliveryAssignment',
+            resourceId: updatedAssignment.id,
+            organisationId: updatedAssignment.sellerOrganisationId,
+            previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+            newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+
+        return this.toOrderDetail(await this.findProductOrderDetailOrThrow(tx, updatedOrder.id));
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async retryDelivery(
+    orderId: string,
+    dto: RetryDeliveryDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    const reason = dto.reason?.trim() || 'Scheduled delivery retry started';
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await this.findProductOrderDetailOrThrow(tx, orderId);
+        const assignment = this.requireDeliveryAssignment(order);
+        this.ensureDeliveryAssignmentManageAccess(actor, assignment);
+        this.ensureDeliveryRetryAllowed(order, new Date());
+        const otp = this.generateDeliveryOtp();
+        const startedAt = new Date();
+
+        const updatedAssignment = await tx.productDeliveryAssignment.update({
+          where: { id: assignment.id },
+          data: {
+            status: ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY,
+            otpHash: otp.hash,
+            otpSalt: otp.salt,
+            otpExpiresAt: this.hoursFromNow(DELIVERY_OTP_EXPIRY_HOURS),
+            otpAttemptCount: 0,
+            otpVerifiedAt: null,
+            startedByUserId: actor.userId,
+            startedByRole: actor.role,
+            startedAt,
+          },
+        });
+        const updatedOrder = await tx.productOrder.update({
+          where: { id: order.id },
+          data: { status: ProductOrderStatus.OUT_FOR_DELIVERY },
+        });
+
+        await this.recordStatusHistory(tx, {
+          order: updatedOrder,
+          actor,
+          fromStatus: order.status,
+          toStatus: ProductOrderStatus.OUT_FOR_DELIVERY,
+          requestId,
+          reason,
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_ORDER_DELIVERY_RETRIED',
+            resourceType: 'ProductOrder',
+            resourceId: updatedOrder.id,
+            organisationId: updatedOrder.sellerOrganisationId,
+            previousValue: this.productOrderAuditValue(order),
+            newValue: this.productOrderAuditValue(updatedOrder),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'PRODUCT_DELIVERY_RETRIED',
+            resourceType: 'ProductDeliveryAssignment',
+            resourceId: updatedAssignment.id,
+            organisationId: updatedAssignment.sellerOrganisationId,
+            previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+            newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+            requestId,
+            reason,
+          }),
+          tx,
+        );
+
+        const savedOrder = await this.findProductOrderDetailOrThrow(tx, updatedOrder.id);
+        return this.toOrderDetail(savedOrder, this.mockDeliveryOtp(otp.code));
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   }
 
@@ -868,83 +1389,265 @@ export class CheckoutService {
             message: 'Cart must contain at least one item before checkout',
           });
         }
-
-        const deliveryAddress = await this.resolveCheckoutAddress(tx, dto, profile, cart);
-        const pincode = deliveryAddress.pincode;
-        this.ensureCartPincodeMatchesAddress(cart, pincode);
-
-        const preparedItems = await this.prepareCartItemsForCheckout(tx, cart, pincode);
-        const itemsBySeller = this.groupItemsBySeller(preparedItems);
-        const subtotalPaise = preparedItems.reduce((total, item) => total + item.lineTotalPaise, 0);
-
-        const checkout = await tx.productCheckout.create({
-          data: {
-            farmerProfileId: profile.id,
-            sourceCartId: cart.id,
-            deliveryAddressId: deliveryAddress.id,
-            serviceablePincode: pincode,
-            status: ProductCheckoutStatus.PENDING_PAYMENT,
-            subtotalPaise,
-            itemCount: preparedItems.length,
-            childOrderCount: itemsBySeller.size,
-          },
-        });
-
-        await this.auditService.record(
-          this.withActor(actor, {
-            action: 'PRODUCT_CHECKOUT_CREATED',
-            resourceType: 'ProductCheckout',
-            resourceId: checkout.id,
-            newValue: this.checkoutAuditValue(checkout),
-            requestId,
-            reason: dto.reason,
-          }),
+        const result = await this.createCheckoutFromResolvedCart(
           tx,
+          dto,
+          actor,
+          profile,
+          cart,
+          requestId,
         );
-
-        for (const sellerItems of itemsBySeller.values()) {
-          await this.createChildOrderWithReservations(tx, {
-            actor,
-            checkoutId: checkout.id,
-            farmerProfileId: profile.id,
-            deliveryAddress,
-            items: sellerItems,
-            requestId,
-            reason: dto.reason,
-          });
-        }
-
-        await tx.cartItem.deleteMany({
-          where: { cartId: cart.id },
-        });
-        const clearedCart = await tx.cart.update({
-          where: { id: cart.id },
-          data: {
-            deliveryAddressId: null,
-            serviceablePincode: null,
-          },
-          include: checkoutCartInclude,
-        });
-        await this.auditService.record(
-          this.withActor(actor, {
-            action: 'CART_CHECKED_OUT',
-            resourceType: 'Cart',
-            resourceId: cart.id,
-            previousValue: this.cartAuditValue(cart),
-            newValue: this.cartAuditValue(clearedCart),
-            requestId,
-            reason: dto.reason,
-          }),
-          tx,
-        );
-
-        const savedCheckout = await this.findCheckoutForProfileOrThrow(tx, checkout.id, profile.id);
-        return this.toCheckoutDetail(savedCheckout);
+        return result.detail;
       },
       {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       },
     );
+  }
+
+  private async createAssistedCheckout(
+    tokenId: string,
+    dto: RedeemKisanClubBenefitTokenDto,
+    actor: CurrentUser,
+    requestId?: string,
+  ) {
+    if (!this.kisanClubBenefitTokenService) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Kisan Club benefit tokens are unavailable',
+      });
+    }
+    return this.prisma.$transaction(
+      async (tx) => {
+        const token = await this.kisanClubBenefitTokenService!.findRedeemable(tx, tokenId, actor);
+        const profile = token.membership.farmerProfile;
+        const address = await tx.farmerAddress.findFirst({
+          where: {
+            farmerProfileId: profile.id,
+            ...(dto.farmerAddressId ? { id: dto.farmerAddressId } : {}),
+          },
+          orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+        });
+        if (!address) {
+          throw new BadRequestException({
+            code: ApiErrorCode.VALIDATION_FAILED,
+            message: 'A farmer delivery address is required for assisted checkout',
+          });
+        }
+
+        const existingCart = await tx.cart.findUnique({
+          where: { farmerProfileId: profile.id },
+          include: checkoutCartInclude,
+        });
+        if (existingCart && existingCart.items.length > 0) {
+          throw new ConflictException({
+            code: ApiErrorCode.CONFLICT,
+            message:
+              'The farmer cart must be empty before an assisted order can be created; existing farmer selections were preserved',
+          });
+        }
+        const cart = existingCart
+          ? await tx.cart.update({
+              where: { id: existingCart.id },
+              data: {
+                status: CartStatus.ACTIVE,
+                deliveryAddressId: address.id,
+                serviceablePincode: address.pincode,
+                kisanClubContext: true,
+              },
+              include: checkoutCartInclude,
+            })
+          : await tx.cart.create({
+              data: {
+                farmerProfileId: profile.id,
+                status: CartStatus.ACTIVE,
+                deliveryAddressId: address.id,
+                serviceablePincode: address.pincode,
+                kisanClubContext: true,
+              },
+              include: checkoutCartInclude,
+            });
+
+        const offer = await this.findOfferOrThrow(tx, token.offerId);
+        const availableQuantity = await this.validateOfferForCheckout(
+          tx,
+          offer,
+          address.pincode,
+          token.quantity,
+        );
+        if (availableQuantity < token.quantity) {
+          throw new BadRequestException({
+            code: ApiErrorCode.VALIDATION_FAILED,
+            message: 'Requested quantity exceeds backend-derived sellable availability',
+          });
+        }
+        const stagedItem = await tx.cartItem.create({
+          data: {
+            cartId: cart.id,
+            offerId: offer.id,
+            distributorOrganisationId: offer.distributorOrganisationId,
+            productId: offer.productId,
+            variantId: offer.variantId,
+            warehouseId: offer.warehouseId,
+            batchId: offer.batchId,
+            quantity: token.quantity,
+            priceSnapshotPaise: offer.sellingPricePaise,
+            clubBenefitSnapshotPaise: 0,
+            availableQuantitySnapshot: availableQuantity,
+            serviceablePincodeSnapshot: address.pincode,
+            productNameSnapshot: offer.product.name,
+            variantNameSnapshot: offer.variant.variantName,
+            sellerNameSnapshot: offer.distributorOrganisation.displayName,
+            warehouseNameSnapshot: offer.warehouse.name,
+            fulfilmentModeSnapshot: offer.fulfilmentMode,
+            deliverySlaDaysSnapshot: offer.deliverySlaDays,
+          },
+        });
+        await this.auditService.record(
+          this.withActor(actor, {
+            action: 'KISAN_CLUB_ASSISTED_CART_STAGED',
+            resourceType: 'CartItem',
+            resourceId: stagedItem.id,
+            newValue: {
+              cartId: stagedItem.cartId,
+              offerId: stagedItem.offerId,
+              farmerProfileId: profile.id,
+              quantity: stagedItem.quantity,
+              priceSnapshotPaise: stagedItem.priceSnapshotPaise,
+              serviceablePincodeSnapshot: stagedItem.serviceablePincodeSnapshot,
+            },
+            requestId,
+            reason: `Assisted purchase using benefit token ${token.tokenReference}`,
+          }),
+          tx,
+        );
+        const populatedCart = await this.findActiveCartForProfileOrThrow(tx, profile.id);
+        const result = await this.createCheckoutFromResolvedCart(
+          tx,
+          {
+            farmerAddressId: address.id,
+            reason:
+              dto.reason?.trim() ||
+              `Promoter assisted purchase using benefit token ${token.tokenReference}`,
+          },
+          actor,
+          profile,
+          populatedCart,
+          requestId,
+          token.id,
+        );
+        const order = result.createdOrders[0];
+        if (!order || result.createdOrders.length !== 1 || order.clubBenefitPaise <= 0) {
+          throw new ConflictException({
+            code: ApiErrorCode.CONFLICT,
+            message: 'The live Kisan Club benefit is no longer available; issue a new token',
+          });
+        }
+        await this.kisanClubBenefitTokenService!.consume(tx, token.id, order.id, actor, requestId);
+        return {
+          ...result.detail,
+          assistedPurchase: {
+            benefitTokenId: token.id,
+            productOrderId: order.id,
+            paymentRequiredInApp: true,
+          },
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  private async createCheckoutFromResolvedCart(
+    tx: Prisma.TransactionClient,
+    dto: CheckoutFromCartDto,
+    actor: CurrentUser,
+    profile: FarmerProfile,
+    cart: CheckoutCart,
+    requestId?: string,
+    benefitTokenId?: string,
+  ) {
+    const deliveryAddress = await this.resolveCheckoutAddress(tx, dto, profile, cart);
+    const pincode = deliveryAddress.pincode;
+    this.ensureCartPincodeMatchesAddress(cart, pincode);
+
+    const preparedItems = await this.prepareCartItemsForCheckout(tx, cart, pincode, profile.id);
+    const itemsBySeller = this.groupItemsBySeller(preparedItems);
+    const subtotalPaise = preparedItems.reduce((total, item) => total + item.lineTotalPaise, 0);
+    const clubBenefitPaise = preparedItems.reduce(
+      (total, item) => total + (item.clubBenefit?.totalBenefitPaise ?? 0),
+      0,
+    );
+
+    const checkout = await tx.productCheckout.create({
+      data: {
+        farmerProfileId: profile.id,
+        sourceCartId: cart.id,
+        deliveryAddressId: deliveryAddress.id,
+        serviceablePincode: pincode,
+        status: ProductCheckoutStatus.PENDING_PAYMENT,
+        subtotalPaise,
+        clubBenefitPaise,
+        farmerPayablePaise: subtotalPaise - clubBenefitPaise,
+        itemCount: preparedItems.length,
+        childOrderCount: itemsBySeller.size,
+      },
+    });
+
+    await this.auditService.record(
+      this.withActor(actor, {
+        action: 'PRODUCT_CHECKOUT_CREATED',
+        resourceType: 'ProductCheckout',
+        resourceId: checkout.id,
+        newValue: this.checkoutAuditValue(checkout),
+        requestId,
+        reason: dto.reason,
+      }),
+      tx,
+    );
+
+    const createdOrders: ProductOrder[] = [];
+    for (const sellerItems of itemsBySeller.values()) {
+      createdOrders.push(
+        await this.createChildOrderWithReservations(tx, {
+          actor,
+          checkoutId: checkout.id,
+          farmerProfileId: profile.id,
+          deliveryAddress,
+          items: sellerItems,
+          requestId,
+          reason: dto.reason,
+          benefitTokenId,
+        }),
+      );
+    }
+
+    await tx.cartItem.deleteMany({
+      where: { cartId: cart.id },
+    });
+    const clearedCart = await tx.cart.update({
+      where: { id: cart.id },
+      data: {
+        deliveryAddressId: null,
+        serviceablePincode: null,
+        kisanClubContext: false,
+      },
+      include: checkoutCartInclude,
+    });
+    await this.auditService.record(
+      this.withActor(actor, {
+        action: 'CART_CHECKED_OUT',
+        resourceType: 'Cart',
+        resourceId: cart.id,
+        previousValue: this.cartAuditValue(cart),
+        newValue: this.cartAuditValue(clearedCart),
+        requestId,
+        reason: dto.reason,
+      }),
+      tx,
+    );
+
+    const savedCheckout = await this.findCheckoutForProfileOrThrow(tx, checkout.id, profile.id);
+    return { detail: this.toCheckoutDetail(savedCheckout), createdOrders };
   }
 
   private async cancelCheckoutInTransaction(
@@ -1100,6 +1803,13 @@ export class CheckoutService {
       }),
       tx,
     );
+    await this.emitOrderStatusNotification(
+      tx,
+      input.order,
+      FarmerOrderNotificationEvent.ORDER_CANCELLED,
+      input.actor,
+      input.requestId,
+    );
   }
 
   private async transitionFulfilmentOrder(
@@ -1147,6 +1857,11 @@ export class CheckoutService {
           tx,
         );
 
+        const notificationEvent = this.fulfilmentNotificationEvent(toStatus);
+        if (notificationEvent) {
+          await this.emitOrderStatusNotification(tx, order, notificationEvent, actor, requestId);
+        }
+
         const savedOrder = await this.findFulfilmentOrderOrThrow(
           tx,
           updatedOrder.id,
@@ -1161,11 +1876,52 @@ export class CheckoutService {
     );
   }
 
+  private fulfilmentNotificationEvent(
+    status: ProductOrderStatus,
+  ): FarmerOrderNotificationEvent | null {
+    if (status === ProductOrderStatus.DISTRIBUTOR_ACCEPTED) {
+      return FarmerOrderNotificationEvent.ORDER_ACCEPTED;
+    }
+    if (status === ProductOrderStatus.DISTRIBUTOR_REJECTED) {
+      return FarmerOrderNotificationEvent.ORDER_REJECTED;
+    }
+    if (status === ProductOrderStatus.PACKED) {
+      return FarmerOrderNotificationEvent.ORDER_PACKED;
+    }
+    return null;
+  }
+
+  private async emitOrderStatusNotification(
+    tx: Prisma.TransactionClient,
+    order: ProductOrder,
+    event: FarmerOrderNotificationEvent,
+    actor: CurrentUser,
+    requestId?: string,
+  ): Promise<void> {
+    await this.notificationEventsService.emitOrderEvent(tx, {
+      event,
+      farmerProfileId: order.farmerProfileId,
+      productOrderId: order.id,
+      orderNumber: order.orderNumber,
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      requestId,
+    });
+  }
+
   private async fulfilmentOrderWhere(
     query: ListFulfilmentOrdersQueryDto,
     actor: CurrentUser,
     accessMode: 'read' | 'manage',
   ): Promise<Prisma.ProductOrderWhereInput> {
+    const deliveryPartnerOwnRead =
+      accessMode === 'read' &&
+      this.accessService.hasPermission(actor, PermissionCode.DELIVERY_ASSIGNMENTS_READ_OWN) &&
+      !this.accessService.hasPermission(actor, PermissionCode.FULFILMENT_ORDERS_READ_ANY) &&
+      !this.accessService.hasPermission(actor, PermissionCode.FULFILMENT_ORDERS_READ_OWN);
+    if (deliveryPartnerOwnRead && query.sellerOrganisationId) {
+      throw this.forbidden('Delivery partners cannot browse a distributor fulfilment queue');
+    }
     const sellerOrganisationId = await this.resolveFulfilmentSellerOrganisationId(
       actor,
       accessMode,
@@ -1174,6 +1930,9 @@ export class CheckoutService {
     const where: Prisma.ProductOrderWhereInput = {
       orderType: OrderType.PRODUCT_ORDER,
       ...(sellerOrganisationId ? { sellerOrganisationId } : {}),
+      ...(deliveryPartnerOwnRead
+        ? { deliveryAssignment: { is: { deliveryPartnerUserId: actor.userId } } }
+        : {}),
     };
 
     if (query.status) {
@@ -1213,7 +1972,13 @@ export class CheckoutService {
       });
     }
 
-    await this.ensureFulfilmentOrderAccess(client, actor, accessMode, order.sellerOrganisationId);
+    await this.ensureFulfilmentOrderAccess(
+      client,
+      actor,
+      accessMode,
+      order.id,
+      order.sellerOrganisationId,
+    );
     return order;
   }
 
@@ -1260,6 +2025,13 @@ export class CheckoutService {
       return requestedOrganisationId;
     }
 
+    if (
+      accessMode === 'read' &&
+      this.accessService.hasPermission(actor, PermissionCode.DELIVERY_ASSIGNMENTS_READ_OWN)
+    ) {
+      return undefined;
+    }
+
     if (!this.accessService.hasPermission(actor, ownPermission)) {
       throw this.forbidden('Fulfilment order permission is required');
     }
@@ -1278,6 +2050,7 @@ export class CheckoutService {
     client: CheckoutClient,
     actor: CurrentUser,
     accessMode: 'read' | 'manage',
+    productOrderId: string,
     sellerOrganisationId: string,
   ): Promise<void> {
     const anyPermission =
@@ -1294,6 +2067,15 @@ export class CheckoutService {
         await this.ensureActiveDistributorOrganisation(client, sellerOrganisationId);
       }
       return;
+    }
+    if (
+      accessMode === 'read' &&
+      this.accessService.hasPermission(actor, PermissionCode.DELIVERY_ASSIGNMENTS_READ_OWN)
+    ) {
+      const assignment = await client.productDeliveryAssignment.findUnique({
+        where: { productOrderId },
+      });
+      if (assignment?.deliveryPartnerUserId === actor.userId) return;
     }
     if (
       this.accessService.hasPermission(actor, ownPermission) &&
@@ -1375,6 +2157,11 @@ export class CheckoutService {
             organisation: true,
           },
         },
+        deliveryPartnerProfiles: {
+          where: {
+            availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+          },
+        },
       },
     });
 
@@ -1385,12 +2172,17 @@ export class CheckoutService {
       });
     }
     const activeMembership = user.memberships.find(
-      (membership) => membership.organisation.status === OrganisationStatus.ACTIVE,
+      (membership) =>
+        membership.organisation.type === OrganisationType.DELIVERY_PARTNER &&
+        membership.organisation.status === OrganisationStatus.ACTIVE &&
+        user.deliveryPartnerProfiles.some(
+          (profile) => profile.organisationId === membership.organisationId,
+        ),
     );
     if (!activeMembership) {
       throw new BadRequestException({
         code: ApiErrorCode.VALIDATION_FAILED,
-        message: 'Delivery partner must have an active delivery partner membership',
+        message: 'Delivery partner must be online in an active delivery partner context',
       });
     }
 
@@ -1446,6 +2238,24 @@ export class CheckoutService {
       });
     }
     return fallback;
+  }
+
+  private deliveryAssignmentRejectionReason(dto: FulfilmentOrderDecisionDto): string {
+    const reason = dto.reason?.trim();
+    if (reason) return reason;
+    throw new BadRequestException({
+      code: ApiErrorCode.VALIDATION_FAILED,
+      message: 'A reason is required when rejecting a delivery assignment',
+    });
+  }
+
+  private deliveryAssignmentReassignmentReason(dto: AssignDeliveryDto): string {
+    const reason = dto.reason?.trim();
+    if (reason) return reason;
+    throw new BadRequestException({
+      code: ApiErrorCode.VALIDATION_FAILED,
+      message: 'A reason is required when reassigning a rejected delivery',
+    });
   }
 
   private invoiceGenerationReason(dto: GenerateProductInvoiceDto): string {
@@ -1510,13 +2320,100 @@ export class CheckoutService {
         message: 'Only ready-for-pickup product orders can move out for delivery',
       });
     }
-    if (assignment.status !== ProductDeliveryAssignmentStatus.ASSIGNED) {
+    if (assignment.status !== ProductDeliveryAssignmentStatus.ACCEPTED) {
       throw new ConflictException({
         code: ApiErrorCode.CONFLICT,
-        message: 'Only assigned deliveries can move out for delivery',
+        message: 'Delivery assignment must be accepted before pickup',
+      });
+    }
+    if (!assignment.pickupVerifiedAt) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Verify the package QR before starting delivery',
       });
     }
 
+    return assignment;
+  }
+
+  private ensureDispatchLabelCanBeIssued(order: ProductOrderWithDetails): ProductDispatch {
+    if (
+      order.status !== ProductOrderStatus.READY_FOR_PICKUP ||
+      !order.dispatch ||
+      order.dispatch.status !== ProductDispatchStatus.READY_FOR_PICKUP
+    ) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'A package label can only be issued for a ready-for-pickup dispatch',
+      });
+    }
+    if (order.deliveryAssignment?.pickupVerifiedAt) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Package label cannot be reissued after pickup verification',
+      });
+    }
+    return order.dispatch;
+  }
+
+  private ensurePackagePickupCanBeVerified(order: ProductOrderWithDetails): ProductDispatch {
+    const assignment = this.requireDeliveryAssignment(order);
+    if (
+      order.status !== ProductOrderStatus.READY_FOR_PICKUP ||
+      assignment.status !== ProductDeliveryAssignmentStatus.ACCEPTED
+    ) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Only accepted assignments can verify package pickup',
+      });
+    }
+    if (assignment.pickupVerifiedAt) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Package pickup has already been verified',
+      });
+    }
+    if (!order.dispatch?.packageQrHash) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'The seller must issue a package QR label before pickup',
+      });
+    }
+    return order.dispatch;
+  }
+
+  private ensureDeliveryAssignmentResponseAllowed(
+    order: ProductOrderWithDetails,
+  ): ProductDeliveryAssignment {
+    const assignment = this.requireDeliveryAssignment(order);
+    if (order.status !== ProductOrderStatus.READY_FOR_PICKUP) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Delivery assignments can only be answered before pickup',
+      });
+    }
+    if (assignment.status !== ProductDeliveryAssignmentStatus.ASSIGNED) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Only pending delivery assignments can be accepted or rejected',
+      });
+    }
+    return assignment;
+  }
+
+  private ensureDeliveryReassignmentAllowed(
+    order: ProductOrderWithDetails,
+  ): ProductDeliveryAssignment {
+    const assignment = this.requireDeliveryAssignment(order);
+    if (
+      order.status !== ProductOrderStatus.READY_FOR_PICKUP ||
+      assignment.status !== ProductDeliveryAssignmentStatus.REJECTED
+    ) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Only rejected delivery assignments can be reassigned',
+      });
+    }
     return assignment;
   }
 
@@ -1538,6 +2435,38 @@ export class CheckoutService {
     }
 
     return assignment;
+  }
+
+  private ensureDeliveryFailureAllowed(order: ProductOrderWithDetails): void {
+    const assignment = this.requireDeliveryAssignment(order);
+    if (
+      order.status !== ProductOrderStatus.OUT_FOR_DELIVERY ||
+      assignment.status !== ProductDeliveryAssignmentStatus.OUT_FOR_DELIVERY
+    ) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Only an out-for-delivery assignment can be marked as failed',
+      });
+    }
+  }
+
+  private ensureDeliveryRetryAllowed(order: ProductOrderWithDetails, now: Date): void {
+    const assignment = this.requireDeliveryAssignment(order);
+    if (
+      order.status !== ProductOrderStatus.DELIVERY_FAILED ||
+      assignment.status !== ProductDeliveryAssignmentStatus.DELIVERY_FAILED
+    ) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Only a failed delivery can be retried',
+      });
+    }
+    if (!assignment.retryScheduledAt || assignment.retryScheduledAt.getTime() > now.getTime()) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'The scheduled delivery retry time has not been reached',
+      });
+    }
   }
 
   private requireDeliveryAssignment(order: ProductOrderWithDetails): ProductDeliveryAssignment {
@@ -1626,8 +2555,9 @@ export class CheckoutService {
       items: PreparedCheckoutItem[];
       requestId?: string | undefined;
       reason?: string | undefined;
+      benefitTokenId?: string | undefined;
     },
-  ): Promise<void> {
+  ): Promise<ProductOrder> {
     const seller = input.items[0]?.offer.distributorOrganisation;
     if (!seller) {
       throw new BadRequestException({
@@ -1635,7 +2565,17 @@ export class CheckoutService {
         message: 'Product order requires at least one seller item',
       });
     }
+    if (!input.deliveryAddress.stateCode) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Delivery address requires a GST place-of-supply state code',
+      });
+    }
     const subtotalPaise = input.items.reduce((total, item) => total + item.lineTotalPaise, 0);
+    const clubBenefitPaise = input.items.reduce(
+      (total, item) => total + (item.clubBenefit?.totalBenefitPaise ?? 0),
+      0,
+    );
     const order = await tx.productOrder.create({
       data: {
         checkoutId: input.checkoutId,
@@ -1650,6 +2590,9 @@ export class CheckoutService {
         sellerGstinSnapshot: seller.gstin,
         deliveryAddressSnapshot: this.addressSnapshot(input.deliveryAddress),
         subtotalPaise,
+        clubBenefitPaise,
+        farmerPayablePaise: subtotalPaise - clubBenefitPaise,
+        isKisanClubOrder: input.items.some((item) => item.clubProgrammeEligible),
         itemCount: input.items.length,
       },
     });
@@ -1689,6 +2632,10 @@ export class CheckoutService {
           quantity: preparedItem.cartItem.quantity,
           unitPricePaise: preparedItem.unitPricePaise,
           lineTotalPaise: preparedItem.lineTotalPaise,
+          hsnCodeSnapshot: preparedItem.offer.variant.hsnCode,
+          gstRateBpsSnapshot: preparedItem.offer.variant.gstRateBps,
+          clubBenefitRuleId: preparedItem.clubBenefit?.ruleId ?? null,
+          clubBenefitPaise: preparedItem.clubBenefit?.totalBenefitPaise ?? 0,
           productNameSnapshot: preparedItem.offer.product.name,
           variantNameSnapshot: preparedItem.offer.variant.variantName,
           sellerNameSnapshot: preparedItem.offer.distributorOrganisation.displayName,
@@ -1697,6 +2644,15 @@ export class CheckoutService {
           deliverySlaDaysSnapshot: preparedItem.offer.deliverySlaDays,
         },
       });
+
+      if (preparedItem.clubBenefit) {
+        await this.kisanClubBenefitService?.redeem(tx, preparedItem.clubBenefit, {
+          productOrderId: order.id,
+          productOrderItemId: orderItem.id,
+          quantity: preparedItem.cartItem.quantity,
+          ...(input.benefitTokenId ? { benefitTokenId: input.benefitTokenId } : {}),
+        });
+      }
 
       await this.reserveInventoryForOrderItem(tx, {
         actor: input.actor,
@@ -1737,14 +2693,17 @@ export class CheckoutService {
       }),
       tx,
     );
+    return reservedOrder;
   }
 
   private async prepareCartItemsForCheckout(
     tx: Prisma.TransactionClient,
     cart: CheckoutCart,
     pincode: string,
+    farmerProfileId: string,
   ): Promise<PreparedCheckoutItem[]> {
     const preparedItems: PreparedCheckoutItem[] = [];
+    const reservedRuleUsage = new Map<string, number>();
     for (const cartItem of cart.items) {
       const offer = await this.findOfferOrThrow(tx, cartItem.offerId);
       const availableQuantity = await this.validateOfferForCheckout(
@@ -1759,12 +2718,45 @@ export class CheckoutService {
           message: 'Requested quantity exceeds backend-derived sellable availability',
         });
       }
+      if (!offer.variant.hsnCode || offer.variant.gstRateBps === null) {
+        throw new BadRequestException({
+          code: ApiErrorCode.VALIDATION_FAILED,
+          message: 'Product variant is missing approved HSN or GST metadata',
+        });
+      }
 
+      const clubBenefit =
+        (await this.kisanClubBenefitService?.evaluateForCheckout(tx, {
+          farmerProfileId,
+          productId: offer.productId,
+          variantId: offer.variantId,
+          pincode,
+          unitPricePaise: offer.sellingPricePaise,
+          quantity: cartItem.quantity,
+          at: new Date(),
+          reservedRuleUsage,
+        })) ?? null;
+      const clubProgrammeEligible =
+        (await this.kisanClubBenefitService?.isProgrammeEligibleForCheckout(tx, {
+          farmerProfileId,
+          productId: offer.productId,
+          variantId: offer.variantId,
+          pincode,
+          at: new Date(),
+        })) ?? false;
+      if (clubBenefit) {
+        reservedRuleUsage.set(
+          clubBenefit.ruleId,
+          (reservedRuleUsage.get(clubBenefit.ruleId) ?? 0) + 1,
+        );
+      }
       preparedItems.push({
         cartItem,
         offer,
         unitPricePaise: offer.sellingPricePaise,
         lineTotalPaise: offer.sellingPricePaise * cartItem.quantity,
+        clubBenefit,
+        clubProgrammeEligible,
       });
     }
 
@@ -2238,6 +3230,8 @@ export class CheckoutService {
       serviceablePincode: checkout.serviceablePincode,
       status: checkout.status,
       subtotalPaise: checkout.subtotalPaise,
+      clubBenefitPaise: checkout.clubBenefitPaise,
+      farmerPayablePaise: checkout.farmerPayablePaise,
       itemCount: checkout.itemCount,
       childOrderCount: checkout.childOrderCount,
       orders: checkout.orders.map((order) => this.toOrderDetail(order)),
@@ -2264,6 +3258,9 @@ export class CheckoutService {
       sellerGstinSnapshot: order.sellerGstinSnapshot,
       deliveryAddressSnapshot: order.deliveryAddressSnapshot,
       subtotalPaise: order.subtotalPaise,
+      clubBenefitPaise: order.clubBenefitPaise,
+      farmerPayablePaise: order.farmerPayablePaise,
+      isKisanClubOrder: order.isKisanClubOrder,
       itemCount: order.itemCount,
       items: order.items.map((item) => ({
         id: item.id,
@@ -2277,6 +3274,9 @@ export class CheckoutService {
         quantity: item.quantity,
         unitPricePaise: item.unitPricePaise,
         lineTotalPaise: item.lineTotalPaise,
+        clubBenefitRuleId: item.clubBenefitRuleId,
+        clubBenefitPaise: item.clubBenefitPaise,
+        farmerPayablePaise: item.lineTotalPaise - item.clubBenefitPaise,
         productNameSnapshot: item.productNameSnapshot,
         variantNameSnapshot: item.variantNameSnapshot,
         sellerNameSnapshot: item.sellerNameSnapshot,
@@ -2326,12 +3326,21 @@ export class CheckoutService {
       status: invoice.status,
       currency: invoice.currency,
       subtotalPaise: invoice.subtotalPaise,
+      taxableAmountPaise: invoice.taxableAmountPaise,
       taxPaise: invoice.taxPaise,
+      cgstPaise: invoice.cgstPaise,
+      sgstPaise: invoice.sgstPaise,
+      igstPaise: invoice.igstPaise,
       totalPaise: invoice.totalPaise,
       itemCount: invoice.itemCount,
       sellerLegalNameSnapshot: invoice.sellerLegalNameSnapshot,
       sellerDisplayNameSnapshot: invoice.sellerDisplayNameSnapshot,
       sellerGstinSnapshot: invoice.sellerGstinSnapshot,
+      sellerStateCodeSnapshot: invoice.sellerStateCodeSnapshot,
+      sellerAddressSnapshot: invoice.sellerAddressSnapshot,
+      placeOfSupplyStateCode: invoice.placeOfSupplyStateCode,
+      financialYear: invoice.financialYear,
+      sequenceNumber: invoice.sequenceNumber,
       farmerNameSnapshot: invoice.farmerNameSnapshot,
       deliveryAddressSnapshot: invoice.deliveryAddressSnapshot,
       lineItemsSnapshot: invoice.lineItemsSnapshot,
@@ -2363,10 +3372,29 @@ export class CheckoutService {
       readyForPickupReason: dispatch.readyForPickupReason,
       readyByUserId: dispatch.readyByUserId,
       readyByRole: dispatch.readyByRole,
+      packageQrIssuedAt: dispatch.packageQrIssuedAt,
+      packageQrIssuedByUserId: dispatch.packageQrIssuedByUserId,
       readyAt: dispatch.readyAt,
       createdAt: dispatch.createdAt,
       updatedAt: dispatch.updatedAt,
     };
+  }
+
+  /**
+   * Echoes the freshly generated delivery OTP back to the caller, but only
+   * while SMS is mocked -- the same rule `AuthService` applies to login codes.
+   *
+   * Against a real provider the code must exist nowhere but the farmer's
+   * handset. Returning it unconditionally would hand it to the assigning
+   * operator and, because `retryDelivery` is reachable with manage-*own*
+   * authority, to the delivery partner themselves -- who could then close a
+   * delivery the farmer never confirmed, which is precisely what the OTP is
+   * there to prevent. Removing this exposure before go-live is item 14 of the
+   * `REMAINING_IMPLEMENTATION_PLAN` checklist; gating it on the provider means
+   * that happens by flipping `SMS_PROVIDER`, not by remembering to edit code.
+   */
+  private mockDeliveryOtp(code: string): { mockDeliveryOtpCode?: string } {
+    return this.otpSender.isSmsMocked() ? { mockDeliveryOtpCode: code } : {};
   }
 
   private toDeliveryAssignmentDetail(
@@ -2394,6 +3422,10 @@ export class CheckoutService {
       otpExpiresAt: assignment.otpExpiresAt,
       otpAttemptCount: assignment.otpAttemptCount,
       otpVerifiedAt: assignment.otpVerifiedAt,
+      pickupVerificationAttemptCount: assignment.pickupVerificationAttemptCount,
+      pickupVerifiedAt: assignment.pickupVerifiedAt,
+      pickupVerifiedByUserId: assignment.pickupVerifiedByUserId,
+      pickupVerifiedByRole: assignment.pickupVerifiedByRole,
       assignedByUserId: assignment.assignedByUserId,
       assignedByRole: assignment.assignedByRole,
       assignedAt: assignment.assignedAt,
@@ -2404,6 +3436,18 @@ export class CheckoutService {
       completedByRole: assignment.completedByRole,
       completedAt: assignment.completedAt,
       deliveryProofNote: assignment.deliveryProofNote,
+      proofLocationStatus: assignment.proofLocationStatus,
+      proofLatitude: assignment.proofLatitude,
+      proofLongitude: assignment.proofLongitude,
+      proofAccuracyMetres: assignment.proofAccuracyMetres,
+      proofLocationCapturedAt: assignment.proofLocationCapturedAt,
+      failureAttemptCount: assignment.failureAttemptCount,
+      lastFailureReasonCode: assignment.lastFailureReasonCode,
+      lastFailureNote: assignment.lastFailureNote,
+      lastFailedAt: assignment.lastFailedAt,
+      lastFailedByUserId: assignment.lastFailedByUserId,
+      lastFailedByRole: assignment.lastFailedByRole,
+      retryScheduledAt: assignment.retryScheduledAt,
       mockOtpCode: mockDeliveryOtpCode,
       createdAt: assignment.createdAt,
       updatedAt: assignment.updatedAt,
@@ -2422,6 +3466,7 @@ export class CheckoutService {
       city: address.city,
       district: address.district,
       state: address.state,
+      stateCode: address.stateCode,
       pincode: address.pincode,
       landmark: address.landmark,
       isDefault: address.isDefault,
@@ -2439,6 +3484,8 @@ export class CheckoutService {
     serviceablePincode: string;
     status: ProductCheckoutStatus;
     subtotalPaise: number;
+    clubBenefitPaise: number;
+    farmerPayablePaise: number;
     itemCount: number;
     childOrderCount: number;
   }): Prisma.InputJsonObject {
@@ -2449,6 +3496,8 @@ export class CheckoutService {
       serviceablePincode: checkout.serviceablePincode,
       status: checkout.status,
       subtotalPaise: checkout.subtotalPaise,
+      clubBenefitPaise: checkout.clubBenefitPaise,
+      farmerPayablePaise: checkout.farmerPayablePaise,
       itemCount: checkout.itemCount,
       childOrderCount: checkout.childOrderCount,
     };
@@ -2467,6 +3516,9 @@ export class CheckoutService {
       sellerNameSnapshot: order.sellerNameSnapshot,
       sellerGstinSnapshot: order.sellerGstinSnapshot,
       subtotalPaise: order.subtotalPaise,
+      clubBenefitPaise: order.clubBenefitPaise,
+      farmerPayablePaise: order.farmerPayablePaise,
+      isKisanClubOrder: order.isKisanClubOrder,
       itemCount: order.itemCount,
     };
   }
@@ -2481,12 +3533,21 @@ export class CheckoutService {
       status: invoice.status,
       currency: invoice.currency,
       subtotalPaise: invoice.subtotalPaise,
+      taxableAmountPaise: invoice.taxableAmountPaise,
       taxPaise: invoice.taxPaise,
+      cgstPaise: invoice.cgstPaise,
+      sgstPaise: invoice.sgstPaise,
+      igstPaise: invoice.igstPaise,
       totalPaise: invoice.totalPaise,
       itemCount: invoice.itemCount,
       sellerLegalNameSnapshot: invoice.sellerLegalNameSnapshot,
       sellerDisplayNameSnapshot: invoice.sellerDisplayNameSnapshot,
       sellerGstinSnapshot: invoice.sellerGstinSnapshot,
+      sellerStateCodeSnapshot: invoice.sellerStateCodeSnapshot,
+      sellerAddressSnapshot: invoice.sellerAddressSnapshot,
+      placeOfSupplyStateCode: invoice.placeOfSupplyStateCode,
+      financialYear: invoice.financialYear,
+      sequenceNumber: invoice.sequenceNumber,
       farmerNameSnapshot: invoice.farmerNameSnapshot,
       generatedByUserId: invoice.generatedByUserId,
       generatedByRole: invoice.generatedByRole,
@@ -2510,6 +3571,8 @@ export class CheckoutService {
       readyForPickupReason: dispatch.readyForPickupReason,
       readyByUserId: dispatch.readyByUserId,
       readyByRole: dispatch.readyByRole,
+      packageQrIssuedAt: dispatch.packageQrIssuedAt?.toISOString() ?? null,
+      packageQrIssuedByUserId: dispatch.packageQrIssuedByUserId,
       readyAt: dispatch.readyAt.toISOString(),
     };
   }
@@ -2534,6 +3597,10 @@ export class CheckoutService {
       otpExpiresAt: assignment.otpExpiresAt.toISOString(),
       otpAttemptCount: assignment.otpAttemptCount,
       otpVerifiedAt: assignment.otpVerifiedAt?.toISOString() ?? null,
+      pickupVerificationAttemptCount: assignment.pickupVerificationAttemptCount,
+      pickupVerifiedAt: assignment.pickupVerifiedAt?.toISOString() ?? null,
+      pickupVerifiedByUserId: assignment.pickupVerifiedByUserId,
+      pickupVerifiedByRole: assignment.pickupVerifiedByRole,
       assignedByUserId: assignment.assignedByUserId,
       assignedByRole: assignment.assignedByRole,
       assignedAt: assignment.assignedAt.toISOString(),
@@ -2544,6 +3611,87 @@ export class CheckoutService {
       completedByRole: assignment.completedByRole,
       completedAt: assignment.completedAt?.toISOString() ?? null,
       deliveryProofNote: assignment.deliveryProofNote,
+      proofLocationStatus: assignment.proofLocationStatus,
+      proofLatitude: assignment.proofLatitude,
+      proofLongitude: assignment.proofLongitude,
+      proofAccuracyMetres: assignment.proofAccuracyMetres,
+      proofLocationCapturedAt: assignment.proofLocationCapturedAt?.toISOString() ?? null,
+      failureAttemptCount: assignment.failureAttemptCount,
+      lastFailureReasonCode: assignment.lastFailureReasonCode,
+      lastFailureNote: assignment.lastFailureNote,
+      lastFailedAt: assignment.lastFailedAt?.toISOString() ?? null,
+      lastFailedByUserId: assignment.lastFailedByUserId,
+      lastFailedByRole: assignment.lastFailedByRole,
+      retryScheduledAt: assignment.retryScheduledAt?.toISOString() ?? null,
+    };
+  }
+
+  private validateDeliveryRetryTime(value: string): Date {
+    const retryAt = new Date(value);
+    const now = Date.now();
+    if (!Number.isFinite(retryAt.getTime()) || retryAt.getTime() <= now) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Delivery retry time must be in the future',
+      });
+    }
+    if (retryAt.getTime() > now + DELIVERY_RETRY_MAX_DAYS * 86_400_000) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: `Delivery retry time cannot be more than ${DELIVERY_RETRY_MAX_DAYS} days away`,
+      });
+    }
+    return retryAt;
+  }
+
+  private deliveryFailureReason(
+    reasonCode: DeliveryFailureReasonCode,
+    note: string | null,
+  ): string {
+    return note
+      ? `Delivery attempt failed (${reasonCode}): ${note}`
+      : `Delivery attempt failed (${reasonCode})`;
+  }
+
+  private validateDeliveryLocationProof(dto: CompleteDeliveryDto): {
+    latitude: number;
+    longitude: number;
+    accuracyMetres: number;
+    capturedAt: Date;
+  } | null {
+    const values = [
+      dto.proofLatitude,
+      dto.proofLongitude,
+      dto.proofAccuracyMetres,
+      dto.proofLocationCapturedAt,
+    ];
+    if (dto.proofLocationStatus !== DeliveryProofLocationStatus.GRANTED) {
+      if (values.some((value) => value !== undefined)) {
+        throw new BadRequestException({
+          code: ApiErrorCode.VALIDATION_FAILED,
+          message: 'Location coordinates must be omitted when location permission is not granted',
+        });
+      }
+      return null;
+    }
+    if (values.some((value) => value === undefined)) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Granted location proof requires coordinates, accuracy and capture time',
+      });
+    }
+    const capturedAt = new Date(dto.proofLocationCapturedAt!);
+    if (capturedAt.getTime() > Date.now() + 5 * 60 * 1000) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Location proof capture time cannot be in the future',
+      });
+    }
+    return {
+      latitude: dto.proofLatitude!,
+      longitude: dto.proofLongitude!,
+      accuracyMetres: dto.proofAccuracyMetres!,
+      capturedAt,
     };
   }
 
@@ -2599,33 +3747,189 @@ export class CheckoutService {
     });
   }
 
-  private invoiceLineItemsSnapshot(order: ProductOrderWithDetails): Prisma.InputJsonValue {
-    return this.toJsonValue(
-      order.items.map((item) => ({
-        productOrderItemId: item.id,
-        offerId: item.offerId,
-        distributorOrganisationId: item.distributorOrganisationId,
-        productId: item.productId,
-        variantId: item.variantId,
-        warehouseId: item.warehouseId,
-        quantity: item.quantity,
-        unitPricePaise: item.unitPricePaise,
-        lineTotalPaise: item.lineTotalPaise,
-        productNameSnapshot: item.productNameSnapshot,
-        variantNameSnapshot: item.variantNameSnapshot,
-        sellerNameSnapshot: item.sellerNameSnapshot,
-        warehouseNameSnapshot: item.warehouseNameSnapshot,
-        fulfilmentModeSnapshot: item.fulfilmentModeSnapshot,
-        deliverySlaDaysSnapshot: item.deliverySlaDaysSnapshot,
-        reservations: item.reservations.map((reservation) => ({
-          reservationId: reservation.id,
-          batchId: reservation.batchId,
-          batchNumber: reservation.batch.batchNumber,
-          inventoryMovementId: reservation.inventoryMovementId,
-          quantity: reservation.quantity,
-        })),
-      })),
+  private hashPackageQrCode(packageQrCode: string): string {
+    return createHash('sha256').update(packageQrCode, 'utf8').digest('hex');
+  }
+
+  private async recordFailedPackagePickupVerification(
+    assignment: ProductDeliveryAssignment,
+    actor: CurrentUser,
+    requestId?: string,
+  ): Promise<void> {
+    const updatedAssignment = await this.prisma.productDeliveryAssignment.update({
+      where: { id: assignment.id },
+      data: { pickupVerificationAttemptCount: { increment: 1 } },
+    });
+    await this.auditService.record(
+      this.withActor(actor, {
+        action: 'PRODUCT_DELIVERY_PACKAGE_QR_FAILED',
+        resourceType: 'ProductDeliveryAssignment',
+        resourceId: updatedAssignment.id,
+        organisationId: updatedAssignment.sellerOrganisationId,
+        previousValue: this.productDeliveryAssignmentAuditValue(assignment),
+        newValue: this.productDeliveryAssignmentAuditValue(updatedAssignment),
+        requestId,
+        reason: 'Package QR verification failed',
+      }),
     );
+  }
+
+  private invoiceLineItemsSnapshot(
+    order: ProductOrderWithDetails,
+    taxLines: InvoiceTaxLine[],
+  ): Prisma.InputJsonValue {
+    const taxByItemId = new Map(taxLines.map((line) => [line.productOrderItemId, line]));
+    return this.toJsonValue(
+      order.items.map((item) => {
+        const tax = taxByItemId.get(item.id);
+        if (!tax) throw new Error(`Invoice tax line missing for order item ${item.id}`);
+        return {
+          productOrderItemId: item.id,
+          offerId: item.offerId,
+          distributorOrganisationId: item.distributorOrganisationId,
+          productId: item.productId,
+          variantId: item.variantId,
+          warehouseId: item.warehouseId,
+          quantity: item.quantity,
+          unitPricePaise: item.unitPricePaise,
+          lineTotalPaise: item.lineTotalPaise,
+          hsnCode: tax.hsnCode,
+          gstRateBps: tax.gstRateBps,
+          taxableAmountPaise: tax.taxableAmountPaise,
+          taxPaise: tax.taxPaise,
+          cgstPaise: tax.cgstPaise,
+          sgstPaise: tax.sgstPaise,
+          igstPaise: tax.igstPaise,
+          clubBenefitRuleId: item.clubBenefitRuleId,
+          clubBenefitPaise: item.clubBenefitPaise,
+          productNameSnapshot: item.productNameSnapshot,
+          variantNameSnapshot: item.variantNameSnapshot,
+          sellerNameSnapshot: item.sellerNameSnapshot,
+          warehouseNameSnapshot: item.warehouseNameSnapshot,
+          fulfilmentModeSnapshot: item.fulfilmentModeSnapshot,
+          deliverySlaDaysSnapshot: item.deliverySlaDaysSnapshot,
+          reservations: item.reservations.map((reservation) => ({
+            reservationId: reservation.id,
+            batchId: reservation.batchId,
+            batchNumber: reservation.batch.batchNumber,
+            inventoryMovementId: reservation.inventoryMovementId,
+            quantity: reservation.quantity,
+          })),
+        };
+      }),
+    );
+  }
+
+  private verifiedSellerStateCode(seller: Organisation): string {
+    if (!seller.gstin || !seller.registeredStateCode || !seller.gstinVerifiedAt) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Seller GSTIN and registered state must be verified before invoice generation',
+      });
+    }
+    if (seller.gstin.slice(0, 2) !== seller.registeredStateCode) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Seller GSTIN does not match its verified registered state',
+      });
+    }
+    return seller.registeredStateCode;
+  }
+
+  private async invoiceSellerAddress(
+    client: CheckoutClient,
+    sellerOrganisationId: string,
+  ): Promise<string> {
+    const profile = await client.distributorProfile.findUnique({
+      where: { organisationId: sellerOrganisationId },
+      select: { operatingAddress: true, city: true, state: true, pincode: true },
+    });
+    const parts = [
+      profile?.operatingAddress,
+      profile?.city,
+      profile?.state,
+      profile?.pincode,
+    ].filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
+    if (!profile?.operatingAddress || !profile.city || !profile.state || !profile.pincode) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Seller address must be complete before invoice generation',
+      });
+    }
+    return parts.join(', ');
+  }
+
+  private invoicePlaceOfSupplyStateCode(order: ProductOrderWithDetails): string {
+    const snapshot = order.deliveryAddressSnapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Delivery address snapshot is invalid for invoice generation',
+      });
+    }
+    const stateCode = (snapshot as Prisma.JsonObject).stateCode;
+    if (typeof stateCode !== 'string' || !/^[0-9]{2}$/.test(stateCode)) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Delivery address is missing its place-of-supply state code',
+      });
+    }
+    return stateCode;
+  }
+
+  private invoiceTaxCalculation(
+    order: ProductOrderWithDetails,
+    sellerStateCode: string,
+    placeOfSupplyStateCode: string,
+  ) {
+    const lines = order.items.map((item) => {
+      if (!item.hsnCodeSnapshot || item.gstRateBpsSnapshot === null) {
+        throw new BadRequestException({
+          code: ApiErrorCode.VALIDATION_FAILED,
+          message: 'Order item is missing its HSN or GST-rate snapshot',
+        });
+      }
+      return {
+        productOrderItemId: item.id,
+        grossAmountPaise: item.lineTotalPaise,
+        hsnCode: item.hsnCodeSnapshot,
+        gstRateBps: item.gstRateBpsSnapshot,
+      };
+    });
+    const tax = calculateInclusiveInvoiceTax(lines, sellerStateCode, placeOfSupplyStateCode);
+    if (tax.totalPaise !== order.subtotalPaise) {
+      throw new ConflictException({
+        code: ApiErrorCode.CONFLICT,
+        message: 'Invoice tax lines do not reconcile to the backend order subtotal',
+      });
+    }
+    return tax;
+  }
+
+  private async nextInvoiceSequence(
+    tx: Prisma.TransactionClient,
+    sellerOrganisationId: string,
+    financialYear: string,
+  ): Promise<number> {
+    const sequence = await tx.invoiceSequence.upsert({
+      where: { sellerOrganisationId_financialYear: { sellerOrganisationId, financialYear } },
+      create: { sellerOrganisationId, financialYear, lastNumber: 1 },
+      update: { lastNumber: { increment: 1 } },
+    });
+    return sequence.lastNumber;
+  }
+
+  private formatInvoiceNumber(
+    sellerOrganisationId: string,
+    financialYear: string,
+    sequenceNumber: number,
+  ): string {
+    const sellerSeries = sellerOrganisationId
+      .replace(/[^a-f0-9]/gi, '')
+      .slice(0, 4)
+      .toUpperCase();
+    const financialYearSuffix = financialYear.slice(-2);
+    return `${sellerSeries}/${financialYearSuffix}/${String(sequenceNumber).padStart(6, '0')}`;
   }
 
   private dispatchWarehouseSnapshot(order: ProductOrderWithDetails): Prisma.InputJsonValue {
@@ -2764,11 +4068,6 @@ export class CheckoutService {
   private generateOrderNumber(): string {
     const datePart = new Date().toISOString().slice(0, 10).replaceAll('-', '');
     return `PO-${datePart}-${randomUUID().slice(0, 8).toUpperCase()}`;
-  }
-
-  private generateInvoiceNumber(): string {
-    const datePart = new Date().toISOString().slice(0, 10).replaceAll('-', '');
-    return `INV-${datePart}-${randomUUID().slice(0, 8).toUpperCase()}`;
   }
 
   private generateDispatchNumber(): string {

@@ -7,6 +7,7 @@ import {
   CommissionEntryType,
   CommissionRuleStatus,
   DistributorOfferStatus,
+  DeliveryPartnerAvailabilityStatus,
   FinancialLedgerEntryType,
   FulfilmentMode,
   InventoryMovementType,
@@ -120,10 +121,7 @@ describe('Phase 5 finance: payment ledger, commission rules, distributor payable
 
     await request(server).get('/api/v1/finance/ledger').expect(401);
 
-    await request(server)
-      .get('/api/v1/finance/ledger')
-      .set(seeded.farmerHeaders)
-      .expect(403);
+    await request(server).get('/api/v1/finance/ledger').set(seeded.farmerHeaders).expect(403);
   });
 
   it('calculates commission entries and a farmer-payment ledger entry when an order is delivered', async () => {
@@ -333,6 +331,23 @@ describe('Phase 5 finance: payment ledger, commission rules, distributor payable
     const otpCode = assignmentResponse.body.data.deliveryAssignment.mockOtpCode as string;
 
     await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/accept`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ reason: `Accepted for ${keySuffix}` })
+      .expect(201);
+
+    const labelResponse = await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/dispatch-label`)
+      .set(seeded.distributorHeaders)
+      .send({ reason: `Package label for ${keySuffix}` })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/fulfilment/orders/${orderId}/delivery-assignment/verify-pickup`)
+      .set(seeded.deliveryPartnerHeaders)
+      .send({ packageQrCode: labelResponse.body.data.packageQrCode })
+      .expect(201);
+
+    await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/out-for-delivery`)
       .set(seeded.deliveryPartnerHeaders)
       .send({ reason: `Collected for ${keySuffix}` })
@@ -341,7 +356,11 @@ describe('Phase 5 finance: payment ledger, commission rules, distributor payable
     await request(server)
       .post(`/api/v1/fulfilment/orders/${orderId}/deliver`)
       .set(seeded.deliveryPartnerHeaders)
-      .send({ otpCode, proofNote: `Delivered for ${keySuffix}` })
+      .send({
+        otpCode,
+        proofNote: `Delivered for ${keySuffix}`,
+        proofLocationStatus: 'UNAVAILABLE',
+      })
       .expect(201);
 
     return orderId;
@@ -410,6 +429,8 @@ async function seedPhase5Data(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125_000,
     },
   });
@@ -430,6 +451,21 @@ async function seedPhase5Data(): Promise<{
     distributorOrganisation.id,
     PlatformRole.DISTRIBUTOR_OWNER,
   );
+  // Invoice generation refuses to stamp a GST invoice without a complete
+  // seller address, so the seller needs a distributor profile before any
+  // order in this fixture can reach delivery.
+  await prisma.distributorProfile.create({
+    data: {
+      organisationId: distributorOrganisation.id,
+      primaryContactName: 'Phase 5 Distributor Owner',
+      primaryContactPhone: '+919000000022',
+      operatingAddress: 'Plot 12, Agri Market Road',
+      city: 'Jaipur',
+      state: 'Rajasthan',
+      pincode: '302001',
+      serviceablePincodes: ['302001'],
+    },
+  });
 
   const deliveryOrganisation = await createOrganisation({
     type: OrganisationType.DELIVERY_PARTNER,
@@ -441,7 +477,19 @@ async function seedPhase5Data(): Promise<{
     `phase5-delivery-${suffix}@example.local`,
     'Phase 5 Delivery Partner',
   );
-  await createMembership(deliveryPartnerUser.id, deliveryOrganisation.id, PlatformRole.DELIVERY_PARTNER);
+  await createMembership(
+    deliveryPartnerUser.id,
+    deliveryOrganisation.id,
+    PlatformRole.DELIVERY_PARTNER,
+  );
+  await prisma.deliveryPartnerProfile.create({
+    data: {
+      userId: deliveryPartnerUser.id,
+      organisationId: deliveryOrganisation.id,
+      availabilityStatus: DeliveryPartnerAvailabilityStatus.ONLINE,
+      availabilityChangedAt: new Date(),
+    },
+  });
 
   const farmerOrganisation = await createOrganisation({
     type: OrganisationType.VARDHNAM,
@@ -527,6 +575,7 @@ async function seedPhase5Data(): Promise<{
       addressLine1: 'Khasra 42, Rampura Road',
       city: 'Jaipur',
       state: 'Rajasthan',
+      stateCode: '08',
       pincode: '302001',
       isDefault: true,
     },
@@ -596,6 +645,8 @@ async function createOrganisation(input: {
       legalName: input.legalName,
       displayName: input.displayName,
       gstin: input.gstin ?? null,
+      registeredStateCode: input.gstin?.slice(0, 2) ?? null,
+      gstinVerifiedAt: input.gstin ? new Date() : null,
       status: OrganisationStatus.ACTIVE,
     },
   });

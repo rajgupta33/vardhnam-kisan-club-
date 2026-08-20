@@ -1,6 +1,10 @@
 import Link from 'next/link';
-import type { InventoryBatch, InventoryMovement, Warehouse } from '@vardhnam/api-client';
+import type { AuditLog, InventoryBatch, InventoryMovement, Warehouse } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../../components/business-shell';
+import { DataTable, type DataTableColumn } from '../../../../components/data-table';
+import { EmptyState } from '../../../../components/empty-state';
+import { Pagination } from '../../../../components/pagination';
+import { StatusBadge } from '../../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../../lib/format';
 import {
   loadAuditLogs,
@@ -13,27 +17,48 @@ export const dynamic = 'force-dynamic';
 
 interface WarehouseDetailPageProps {
   params: Promise<{ warehouseId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
+const batchLimit = 25;
+const movementLimit = 20;
+const auditLimit = 10;
 
-export default async function WarehouseDetailPage({ params }: WarehouseDetailPageProps) {
+export default async function WarehouseDetailPage({
+  params,
+  searchParams,
+}: WarehouseDetailPageProps) {
   const { warehouseId } = await params;
+  const resolvedSearchParams = (await searchParams) ?? {};
+  const batchPage = parsePage(readParam(resolvedSearchParams.batchPage));
+  const movementPage = parsePage(readParam(resolvedSearchParams.movementPage));
+  const auditPage = parsePage(readParam(resolvedSearchParams.auditPage));
   const warehouseResult = await loadWarehouseDetail(warehouseId);
   const [batchResult, movementResult, auditResult] = warehouseResult.ok
     ? await Promise.all([
-        loadInventoryBatches({ warehouseId, page: 1, limit: 25 }),
-        loadInventoryMovements({ warehouseId, page: 1, limit: 20 }),
+        loadInventoryBatches({ warehouseId, page: batchPage, limit: batchLimit }),
+        loadInventoryMovements({ warehouseId, page: movementPage, limit: movementLimit }),
         loadAuditLogs({
           organisationId: warehouseResult.data.distributorOrganisationId,
-          page: 1,
-          limit: 10,
+          page: auditPage,
+          limit: auditLimit,
         }),
       ])
     : [undefined, undefined, undefined];
   const batches = batchResult?.ok ? batchResult.data.items : [];
+  const batchTotal = batchResult?.ok ? batchResult.data.total : 0;
   const movements = movementResult?.ok ? movementResult.data.items : [];
+  const movementTotal = movementResult?.ok ? movementResult.data.total : 0;
+  const auditEntries = auditResult?.ok ? auditResult.data.items : [];
+  const auditTotal = auditResult?.ok ? auditResult.data.total : 0;
+  const auditColumns: DataTableColumn<AuditLog>[] = [
+    { key: 'time', header: 'Time', render: (entry) => formatDateTime(entry.createdAt) },
+    { key: 'action', header: 'Action', render: (entry) => labelFromCode(entry.action) },
+    { key: 'resource', header: 'Resource', render: (entry) => entry.resourceType },
+    { key: 'reason', header: 'Reason', render: (entry) => entry.reason ?? 'Not recorded' },
+  ];
   const statuses = [
     {
-      label: warehouseResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: warehouseResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: warehouseResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -65,21 +90,28 @@ export default async function WarehouseDetailPage({ params }: WarehouseDetailPag
       </div>
 
       {!warehouseResult.ok ? (
-        <section className="emptyState">
-          <h3>Warehouse Detail Unavailable</h3>
-          <p className="mutedText">{warehouseResult.error}</p>
-        </section>
+        <EmptyState description={warehouseResult.error} title="Warehouse Detail Unavailable" />
       ) : (
         <WarehouseWorkspace
+          auditPage={auditPage}
+          batchPage={batchPage}
           batches={batches}
+          batchTotal={batchTotal}
+          movementPage={movementPage}
           movements={movements}
+          movementTotal={movementTotal}
           warehouse={warehouseResult.data}
+          {...(batchResult && !batchResult.ok ? { batchError: batchResult.error } : {})}
           {...(movementResult && !movementResult.ok ? { movementError: movementResult.error } : {})}
         />
       )}
 
       {auditResult ? (
-        <section className="auditPreview" aria-label="Inventory audit history">
+        <section
+          className="auditPreview"
+          id="warehouse-audit-history"
+          aria-label="Inventory audit history"
+        >
           <div className="sectionHeader">
             <div>
               <p className="eyebrow">Audit</p>
@@ -87,30 +119,32 @@ export default async function WarehouseDetailPage({ params }: WarehouseDetailPag
             </div>
           </div>
           {!auditResult.ok ? (
-            <p className="mutedText">{auditResult.error}</p>
+            <EmptyState description={auditResult.error} title="Inventory history is unavailable" />
           ) : (
-            <div className="tableShell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Resource</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditResult.data.items.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{formatDateTime(entry.createdAt)}</td>
-                      <td>{labelFromCode(entry.action)}</td>
-                      <td>{entry.resourceType}</td>
-                      <td>{entry.reason ?? 'Not recorded'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <DataTable
+                caption="Distributor inventory audit history"
+                columns={auditColumns}
+                emptyDescription="Inventory audit events will appear here."
+                emptyTitle="No inventory history"
+                rowKey={(entry) => entry.id}
+                rows={auditEntries}
+              />
+              <Pagination
+                buildHref={(targetPage) =>
+                  buildWarehouseHref(
+                    warehouseId,
+                    batchPage,
+                    movementPage,
+                    targetPage,
+                    'warehouse-audit-history',
+                  )
+                }
+                limit={auditLimit}
+                page={auditPage}
+                total={auditTotal}
+              />
+            </>
           )}
         </section>
       ) : null}
@@ -122,12 +156,24 @@ function WarehouseWorkspace({
   warehouse,
   batches,
   movements,
+  batchError,
   movementError,
+  batchPage,
+  batchTotal,
+  movementPage,
+  movementTotal,
+  auditPage,
 }: {
   warehouse: Warehouse;
   batches: InventoryBatch[];
   movements: InventoryMovement[];
+  batchError?: string;
   movementError?: string;
+  batchPage: number;
+  batchTotal: number;
+  movementPage: number;
+  movementTotal: number;
+  auditPage: number;
 }) {
   const onHandQuantity = batches.reduce((total, batch) => total + batch.onHandQuantity, 0);
   const sellableQuantity = batches.reduce((total, batch) => total + batch.sellableQuantity, 0);
@@ -142,9 +188,10 @@ function WarehouseWorkspace({
             </p>
             <h3>{warehouse.name}</h3>
           </div>
-          <span className={`statusBadge ${statusTone(warehouse.status)}`}>
-            {labelFromCode(warehouse.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(warehouse.status)}
+            tone={statusTone(warehouse.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Code" value={warehouse.code} />
@@ -163,105 +210,151 @@ function WarehouseWorkspace({
         <p className="eyebrow">Stock</p>
         <h3>Warehouse Snapshot</h3>
         <dl className="definitionGrid">
-          <DetailField label="Batch rows" value={String(batches.length)} />
-          <DetailField label="On hand" value={String(onHandQuantity)} />
-          <DetailField label="Sellable" value={String(sellableQuantity)} />
+          <DetailField label="Batch rows in view" value={String(batches.length)} />
+          <DetailField label="On hand in view" value={String(onHandQuantity)} />
+          <DetailField label="Sellable in view" value={String(sellableQuantity)} />
           <DetailField
-            label="Blocked or expired"
+            label="Blocked or expired in view"
             value={String(batches.filter((batch) => batch.sellableQuantity === 0).length)}
           />
         </dl>
       </section>
 
-      <section className="panel spanTwo">
+      <section className="panel spanTwo" id="warehouse-batches">
         <div className="sectionHeader">
           <div>
             <p className="eyebrow">Batches</p>
             <h3>Warehouse Batch Stock</h3>
           </div>
         </div>
-        <BatchTable batches={batches} />
+        {batchError ? (
+          <EmptyState description={batchError} title="Warehouse batches are unavailable" />
+        ) : (
+          <>
+            <BatchTable batches={batches} />
+            <Pagination
+              buildHref={(targetPage) =>
+                buildWarehouseHref(
+                  warehouse.id,
+                  targetPage,
+                  movementPage,
+                  auditPage,
+                  'warehouse-batches',
+                )
+              }
+              limit={batchLimit}
+              page={batchPage}
+              total={batchTotal}
+            />
+          </>
+        )}
       </section>
 
-      <section className="panel">
+      <section className="panel" id="warehouse-movements">
         <div className="sectionHeader">
           <div>
             <p className="eyebrow">Movements</p>
             <h3>Recent Stock History</h3>
           </div>
         </div>
-        {movementError ? <p className="mutedText">{movementError}</p> : null}
-        <MovementList movements={movements} />
+        {movementError ? (
+          <EmptyState description={movementError} title="Stock history is unavailable" />
+        ) : (
+          <>
+            <MovementTable movements={movements} />
+            <Pagination
+              buildHref={(targetPage) =>
+                buildWarehouseHref(
+                  warehouse.id,
+                  batchPage,
+                  targetPage,
+                  auditPage,
+                  'warehouse-movements',
+                )
+              }
+              limit={movementLimit}
+              page={movementPage}
+              total={movementTotal}
+            />
+          </>
+        )}
       </section>
     </div>
   );
 }
 
 function BatchTable({ batches }: { batches: InventoryBatch[] }) {
-  if (batches.length === 0) {
-    return <p className="mutedText">No batch stock has been recorded for this warehouse.</p>;
-  }
+  const columns: DataTableColumn<InventoryBatch>[] = [
+    { key: 'batch', header: 'Batch', render: (batch) => batch.batchNumber },
+    {
+      key: 'product',
+      header: 'Product',
+      render: (batch) => (
+        <>
+          {batch.product.name}
+          <br />
+          <span className="mutedText">{batch.variant.variantName}</span>
+        </>
+      ),
+    },
+    { key: 'expiry', header: 'Expiry', render: (batch) => formatDateTime(batch.expiryDate) },
+    { key: 'onHand', header: 'On hand', render: (batch) => batch.onHandQuantity },
+    { key: 'sellable', header: 'Sellable', render: (batch) => batch.sellableQuantity },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (batch) => (
+        <StatusBadge
+          label={batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
+          tone={batch.isExpired ? 'danger' : statusTone(batch.status)}
+        />
+      ),
+    },
+  ];
 
   return (
-    <div className="tableShell">
-      <table>
-        <thead>
-          <tr>
-            <th>Batch</th>
-            <th>Product</th>
-            <th>Expiry</th>
-            <th>On hand</th>
-            <th>Sellable</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {batches.map((batch) => (
-            <tr key={batch.id}>
-              <td>{batch.batchNumber}</td>
-              <td>
-                {batch.product.name}
-                <br />
-                <span className="mutedText">{batch.variant.variantName}</span>
-              </td>
-              <td>{formatDateTime(batch.expiryDate)}</td>
-              <td>{batch.onHandQuantity}</td>
-              <td>{batch.sellableQuantity}</td>
-              <td>
-                <span
-                  className={`statusBadge ${batch.isExpired ? 'danger' : statusTone(batch.status)}`}
-                >
-                  {batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      caption="Warehouse batch stock"
+      columns={columns}
+      emptyDescription="Batch stock for this warehouse will appear here."
+      emptyTitle="No warehouse batch stock"
+      rowKey={(batch) => batch.id}
+      rows={batches}
+    />
   );
 }
 
-function MovementList({ movements }: { movements: InventoryMovement[] }) {
-  if (movements.length === 0) {
-    return <p className="mutedText">No inventory movements have been recorded.</p>;
-  }
+function MovementTable({ movements }: { movements: InventoryMovement[] }) {
+  const columns: DataTableColumn<InventoryMovement>[] = [
+    {
+      key: 'type',
+      header: 'Movement',
+      render: (movement) => labelFromCode(movement.movementType),
+    },
+    {
+      key: 'batch',
+      header: 'Batch',
+      render: (movement) => movement.batch?.batchNumber ?? 'Not recorded',
+    },
+    { key: 'quantity', header: 'Quantity', render: (movement) => movement.quantityDelta },
+    { key: 'balance', header: 'Balance', render: (movement) => movement.balanceAfter },
+    { key: 'reason', header: 'Reason', render: (movement) => movement.reason },
+    {
+      key: 'recorded',
+      header: 'Recorded',
+      render: (movement) => formatDateTime(movement.createdAt),
+    },
+  ];
 
   return (
-    <ul className="compactList">
-      {movements.map((movement) => (
-        <li key={movement.id}>
-          <strong>{labelFromCode(movement.movementType)}</strong>
-          <br />
-          {movement.batch?.batchNumber ?? 'Batch'}: {movement.quantityDelta} units, balance{' '}
-          {movement.balanceAfter}
-          <br />
-          <span className="mutedText">
-            {formatDateTime(movement.createdAt)} - {movement.reason}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <DataTable
+      caption="Warehouse stock movements"
+      columns={columns}
+      emptyDescription="Append-only inventory movements will appear here."
+      emptyTitle="No inventory movements"
+      rowKey={(movement) => movement.id}
+      rows={movements}
+    />
   );
 }
 
@@ -282,7 +375,31 @@ function DetailField({
   );
 }
 
-function statusTone(status: string) {
+function buildWarehouseHref(
+  warehouseId: string,
+  batchPage: number,
+  movementPage: number,
+  auditPage: number,
+  anchor: 'warehouse-batches' | 'warehouse-movements' | 'warehouse-audit-history',
+): string {
+  const params = new URLSearchParams();
+  if (batchPage > 1) params.set('batchPage', String(batchPage));
+  if (movementPage > 1) params.set('movementPage', String(movementPage));
+  if (auditPage > 1) params.set('auditPage', String(auditPage));
+  const query = params.toString();
+  return `/inventory/warehouses/${warehouseId}${query ? `?${query}` : ''}#${anchor}`;
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function readParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function statusTone(status: string): 'ok' | 'warn' | 'danger' {
   if (status === 'ACTIVE') {
     return 'ok';
   }

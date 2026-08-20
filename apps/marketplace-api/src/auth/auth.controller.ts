@@ -1,17 +1,21 @@
-import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { getRequestId } from '../common/middleware/correlation-id.middleware';
+import { CurrentUserContext } from './current-user.decorator';
+import type { CurrentUser } from './current-user.interface';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { SelectOrganisationDto } from './dto/select-organisation.dto';
+import { VerifyFarmerOtpDto } from './dto/verify-farmer-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { RefreshTokenContextParam } from './refresh-token-context.decorator';
 import type { RefreshTokenContext } from './refresh-token.guard';
 import { RefreshTokenGuard } from './refresh-token.guard';
+import { MockAuthGuard } from './mock-auth.guard';
 
 function requestMeta(request: Request): { userAgent?: string; ip?: string } {
   const userAgent = request.get('user-agent');
@@ -26,6 +30,12 @@ function requestMeta(request: Request): { userAgent?: string; ip?: string } {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Get('session')
+  @UseGuards(MockAuthGuard)
+  session(@CurrentUserContext() actor: CurrentUser) {
+    return actor;
+  }
+
   @Post('otp/request')
   @HttpCode(200)
   @UseGuards(ThrottlerGuard)
@@ -34,10 +44,28 @@ export class AuthController {
     return this.authService.requestOtp(dto, getRequestId(request), request.ip);
   }
 
+  @Post('farmer/otp/request')
+  @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  requestFarmerOtp(@Body() dto: RequestOtpDto, @Req() request: Request) {
+    return this.authService.requestFarmerOtp(dto, getRequestId(request), request.ip);
+  }
+
   @Post('otp/verify')
   @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   verifyOtp(@Body() dto: VerifyOtpDto, @Req() request: Request) {
-    return this.authService.verifyOtp(dto, getRequestId(request));
+    return this.authService.verifyOtp(dto, getRequestId(request), requestMeta(request));
+  }
+
+  @Post('farmer/otp/verify')
+  @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  verifyFarmerOtp(@Body() dto: VerifyFarmerOtpDto, @Req() request: Request) {
+    return this.authService.verifyFarmerOtp(dto, getRequestId(request), requestMeta(request));
   }
 
   @Post('login')

@@ -55,6 +55,11 @@ export class CreateFarmerAddressDto {
   @MaxLength(80)
   state!: string;
 
+  @ApiPropertyOptional({ example: '08', description: 'GST state code; derived when omitted.' })
+  @IsOptional()
+  @Matches(/^[0-9]{2}$/)
+  stateCode?: string;
+
   @ApiProperty({ example: '302001' })
   @Matches(/^[1-9][0-9]{5}$/)
   pincode!: string;

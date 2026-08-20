@@ -23,6 +23,7 @@ import { AppModule } from '../../src/app.module';
 import { ApiExceptionFilter } from '../../src/common/filters/api-exception.filter';
 import { ResponseEnvelopeInterceptor } from '../../src/common/interceptors/response-envelope.interceptor';
 import { correlationIdMiddleware } from '../../src/common/middleware/correlation-id.middleware';
+import { FarmerPaymentNotificationEvent } from '../../src/notifications/notification-events.service';
 import { MockPaymentOutcome } from '../../src/payments/dto/confirm-mock-payment-intent.dto';
 
 const prisma = new PrismaClient();
@@ -177,15 +178,49 @@ describe('Phase 3C mock payment foundation', () => {
       .expect(201);
     expect(replayPaymentIntentResponse.body.data.id).toBe(paymentIntentResponse.body.data.id);
 
-    const paymentIntentId = paymentIntentResponse.body.data.id as string;
+    const failedPaymentIntentId = paymentIntentResponse.body.data.id as string;
+    const failedConfirmResponse = await request(server)
+      .post(`/api/v1/payments/mock-intents/${failedPaymentIntentId}/confirm`)
+      .set(farmerHeaders)
+      .set('Idempotency-Key', `phase3c-confirm-failed-${randomUUID()}`)
+      .send({
+        outcome: MockPaymentOutcome.FAILURE,
+        failureCode: 'TEST_DECLINED',
+        failureMessage: 'Mock payment declined for integration testing',
+        reason: 'Mock payment failure verified by backend',
+      })
+      .expect(201);
+    expect(failedConfirmResponse.body.data).toEqual(
+      expect.objectContaining({
+        id: failedPaymentIntentId,
+        status: PaymentIntentStatus.FAILED,
+        failureCode: 'TEST_DECLINED',
+      }),
+    );
+    expect(failedConfirmResponse.body.data.checkout.status).toBe(
+      ProductCheckoutStatus.PAYMENT_FAILED,
+    );
+
+    const retryPaymentIntentResponse = await request(server)
+      .post('/api/v1/payments/mock-intents')
+      .set(farmerHeaders)
+      .set('Idempotency-Key', `phase3c-intent-retry-${randomUUID()}`)
+      .send({
+        checkoutId,
+        reason: 'Farmer retried mock payment',
+      })
+      .expect(201);
+    const paymentIntentId = retryPaymentIntentResponse.body.data.id as string;
+    const successfulConfirmationKey = `phase3c-confirm-${randomUUID()}`;
+    const successfulConfirmationBody = {
+      outcome: MockPaymentOutcome.SUCCESS,
+      reason: 'Mock payment confirmed by backend',
+    };
     const confirmResponse = await request(server)
       .post(`/api/v1/payments/mock-intents/${paymentIntentId}/confirm`)
       .set(farmerHeaders)
-      .set('Idempotency-Key', `phase3c-confirm-${randomUUID()}`)
-      .send({
-        outcome: MockPaymentOutcome.SUCCESS,
-        reason: 'Mock payment confirmed by backend',
-      })
+      .set('Idempotency-Key', successfulConfirmationKey)
+      .send(successfulConfirmationBody)
       .expect(201);
     expect(confirmResponse.body.data).toEqual(
       expect.objectContaining({
@@ -207,6 +242,14 @@ describe('Phase 3C mock payment foundation', () => {
         }),
       ]),
     );
+
+    const replayConfirmationResponse = await request(server)
+      .post(`/api/v1/payments/mock-intents/${paymentIntentId}/confirm`)
+      .set(farmerHeaders)
+      .set('Idempotency-Key', successfulConfirmationKey)
+      .send(successfulConfirmationBody)
+      .expect(201);
+    expect(replayConfirmationResponse.body.data.id).toBe(paymentIntentId);
 
     const checkoutAfterPaymentResponse = await request(server)
       .get(`/api/v1/checkout/${checkoutId}`)
@@ -235,6 +278,48 @@ describe('Phase 3C mock payment foundation', () => {
       ]),
     );
 
+    const notificationResponse = await request(server)
+      .get('/api/v1/notifications/me')
+      .query({ channel: 'IN_APP', limit: 100 })
+      .set(farmerHeaders)
+      .expect(200);
+    const paymentNotifications = (
+      notificationResponse.body.data.items as Array<{
+        category: string;
+        relatedResourceType: string | null;
+        relatedResourceId: string | null;
+        status: string;
+        payloadSnapshot: Record<string, unknown>;
+      }>
+    ).filter((notification) => notification.relatedResourceId === checkoutId);
+    expect(paymentNotifications).toHaveLength(2);
+    expect(paymentNotifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: FarmerPaymentNotificationEvent.PAYMENT_FAILED,
+          relatedResourceType: 'ProductCheckout',
+          relatedResourceId: checkoutId,
+          status: 'SENT',
+          payloadSnapshot: expect.objectContaining({
+            amountPaise: paymentIntentResponse.body.data.amountPaise,
+            paymentIntentId: failedPaymentIntentId,
+            productCheckoutId: checkoutId,
+          }),
+        }),
+        expect.objectContaining({
+          category: FarmerPaymentNotificationEvent.PAYMENT_SUCCEEDED,
+          relatedResourceType: 'ProductCheckout',
+          relatedResourceId: checkoutId,
+          status: 'SENT',
+          payloadSnapshot: expect.objectContaining({
+            amountPaise: paymentIntentResponse.body.data.amountPaise,
+            paymentIntentId,
+            productCheckoutId: checkoutId,
+          }),
+        }),
+      ]),
+    );
+
     const auditResponse = await request(server)
       .get('/api/v1/audit-logs')
       .query({ actorUserId: farmerUserId, limit: 100 })
@@ -243,6 +328,7 @@ describe('Phase 3C mock payment foundation', () => {
     expect(auditResponse.body.data.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: 'MOCK_PAYMENT_INTENT_CREATED' }),
+        expect.objectContaining({ action: 'MOCK_PAYMENT_FAILED' }),
         expect.objectContaining({ action: 'MOCK_PAYMENT_CONFIRMED' }),
         expect.objectContaining({ action: 'PRODUCT_CHECKOUT_PAYMENT_PAID' }),
         expect.objectContaining({ action: 'PRODUCT_ORDER_PAYMENT_CONFIRMED' }),
@@ -349,6 +435,8 @@ async function seedCheckoutData(): Promise<{
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125000,
     },
   });

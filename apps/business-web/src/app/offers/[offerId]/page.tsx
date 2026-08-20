@@ -1,6 +1,11 @@
 import Link from 'next/link';
-import type { DistributorOffer, InventoryBatch } from '@vardhnam/api-client';
+import type { AuditLog, DistributorOffer, InventoryBatch } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
+import { ConfirmSubmitButton } from '../../../components/confirm-submit-button';
+import { DataTable, type DataTableColumn } from '../../../components/data-table';
+import { EmptyState } from '../../../components/empty-state';
+import { Pagination } from '../../../components/pagination';
+import { StatusBadge } from '../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
 import { loadAuditLogs, loadInventoryBatches, loadOfferDetail } from '../../../lib/marketplace-api';
 import {
@@ -13,6 +18,8 @@ import {
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Record<string, string | string[] | undefined>;
+const batchLimit = 25;
+const auditLimit = 10;
 
 interface OfferDetailPageProps {
   params: Promise<{ offerId: string }>;
@@ -22,6 +29,8 @@ interface OfferDetailPageProps {
 export default async function OfferDetailPage({ params, searchParams }: OfferDetailPageProps) {
   const { offerId } = await params;
   const resolvedSearchParams = (await searchParams) ?? {};
+  const batchPage = parsePage(readParam(resolvedSearchParams.batchPage));
+  const auditPage = parsePage(readParam(resolvedSearchParams.auditPage));
   const offerResult = await loadOfferDetail(offerId);
   const [batchResult, auditResult] = offerResult.ok
     ? await Promise.all([
@@ -30,22 +39,31 @@ export default async function OfferDetailPage({ params, searchParams }: OfferDet
           productId: offerResult.data.productId,
           variantId: offerResult.data.variantId,
           ...(offerResult.data.batchId ? { batchId: offerResult.data.batchId } : {}),
-          page: 1,
-          limit: 25,
+          page: batchPage,
+          limit: batchLimit,
         }),
         loadAuditLogs({
           organisationId: offerResult.data.distributorOrganisationId,
-          page: 1,
-          limit: 10,
+          page: auditPage,
+          limit: auditLimit,
         }),
       ])
     : [undefined, undefined];
   const batches = batchResult?.ok ? batchResult.data.items : [];
+  const batchTotal = batchResult?.ok ? batchResult.data.total : 0;
+  const auditEntries = auditResult?.ok ? auditResult.data.items : [];
+  const auditTotal = auditResult?.ok ? auditResult.data.total : 0;
   const notice = readParam(resolvedSearchParams.notice);
   const error = readParam(resolvedSearchParams.error);
+  const auditColumns: DataTableColumn<AuditLog>[] = [
+    { key: 'time', header: 'Time', render: (entry) => formatDateTime(entry.createdAt) },
+    { key: 'action', header: 'Action', render: (entry) => labelFromCode(entry.action) },
+    { key: 'resource', header: 'Resource', render: (entry) => entry.resourceType },
+    { key: 'reason', header: 'Reason', render: (entry) => entry.reason ?? 'Not recorded' },
+  ];
   const statuses = [
     {
-      label: offerResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: offerResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: offerResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -80,20 +98,20 @@ export default async function OfferDetailPage({ params, searchParams }: OfferDet
       {error ? <p className="noticeBanner danger">{error}</p> : null}
 
       {!offerResult.ok ? (
-        <section className="emptyState">
-          <h3>Offer Detail Unavailable</h3>
-          <p className="mutedText">{offerResult.error}</p>
-        </section>
+        <EmptyState description={offerResult.error} title="Offer Detail Unavailable" />
       ) : (
         <OfferWorkspace
+          auditPage={auditPage}
+          batchPage={batchPage}
           batches={batches}
+          batchTotal={batchTotal}
           offer={offerResult.data}
           {...(batchResult && !batchResult.ok ? { batchError: batchResult.error } : {})}
         />
       )}
 
       {auditResult ? (
-        <section className="auditPreview" aria-label="Offer audit history">
+        <section className="auditPreview" id="offer-audit-history" aria-label="Offer audit history">
           <div className="sectionHeader">
             <div>
               <p className="eyebrow">Audit</p>
@@ -101,30 +119,26 @@ export default async function OfferDetailPage({ params, searchParams }: OfferDet
             </div>
           </div>
           {!auditResult.ok ? (
-            <p className="mutedText">{auditResult.error}</p>
+            <EmptyState description={auditResult.error} title="Offer history is unavailable" />
           ) : (
-            <div className="tableShell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Resource</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditResult.data.items.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{formatDateTime(entry.createdAt)}</td>
-                      <td>{labelFromCode(entry.action)}</td>
-                      <td>{entry.resourceType}</td>
-                      <td>{entry.reason ?? 'Not recorded'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <DataTable
+                caption="Distributor offer audit history"
+                columns={auditColumns}
+                emptyDescription="Offer review and status events will appear here."
+                emptyTitle="No offer history"
+                rowKey={(entry) => entry.id}
+                rows={auditEntries}
+              />
+              <Pagination
+                buildHref={(targetPage) =>
+                  buildOfferDetailHref(offerId, batchPage, targetPage, 'offer-audit-history')
+                }
+                limit={auditLimit}
+                page={auditPage}
+                total={auditTotal}
+              />
+            </>
           )}
         </section>
       ) : null}
@@ -136,10 +150,16 @@ function OfferWorkspace({
   offer,
   batches,
   batchError,
+  batchPage,
+  batchTotal,
+  auditPage,
 }: {
   offer: DistributorOffer;
   batches: InventoryBatch[];
   batchError?: string;
+  batchPage: number;
+  batchTotal: number;
+  auditPage: number;
 }) {
   const ready = offer.missingRequirements.length === 0;
 
@@ -154,9 +174,7 @@ function OfferWorkspace({
             </p>
             <h3>{offer.product.name}</h3>
           </div>
-          <span className={`statusBadge ${statusTone(offer.status)}`}>
-            {labelFromCode(offer.status)}
-          </span>
+          <StatusBadge label={labelFromCode(offer.status)} tone={statusTone(offer.status)} />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Offer code" value={offer.offerCode} />
@@ -179,12 +197,14 @@ function OfferWorkspace({
         <h3>Approval Checks</h3>
         <div className="requirementList stacked">
           {ready ? (
-            <span className="statusBadge ok">Ready for approval</span>
+            <StatusBadge label="Ready for approval" tone="ok" />
           ) : (
             offer.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
+              <StatusBadge
+                key={requirement}
+                label={`Missing ${labelFromCode(requirement)}`}
+                tone="warn"
+              />
             ))
           )}
         </div>
@@ -222,15 +242,28 @@ function OfferWorkspace({
         )}
       </section>
 
-      <section className="panel spanTwo">
+      <section className="panel spanTwo" id="offer-inventory">
         <div className="sectionHeader">
           <div>
             <p className="eyebrow">Inventory</p>
             <h3>Linked Stock Snapshot</h3>
           </div>
         </div>
-        {batchError ? <p className="mutedText">{batchError}</p> : null}
-        <BatchTable batches={batches} />
+        {batchError ? (
+          <EmptyState description={batchError} title="Linked inventory is unavailable" />
+        ) : (
+          <>
+            <BatchTable batches={batches} />
+            <Pagination
+              buildHref={(targetPage) =>
+                buildOfferDetailHref(offer.id, targetPage, auditPage, 'offer-inventory')
+              }
+              limit={batchLimit}
+              page={batchPage}
+              total={batchTotal}
+            />
+          </>
+        )}
       </section>
 
       <OfferOperationsPanel offer={offer} />
@@ -241,43 +274,37 @@ function OfferWorkspace({
 }
 
 function BatchTable({ batches }: { batches: InventoryBatch[] }) {
-  if (batches.length === 0) {
-    return <p className="mutedText">No eligible stock rows were returned for this offer.</p>;
-  }
+  const columns: DataTableColumn<InventoryBatch>[] = [
+    { key: 'batch', header: 'Batch', render: (batch) => batch.batchNumber },
+    {
+      key: 'warehouse',
+      header: 'Warehouse',
+      render: (batch) => batch.warehouse?.name ?? 'Not recorded',
+    },
+    { key: 'expiry', header: 'Expiry', render: (batch) => formatDateTime(batch.expiryDate) },
+    { key: 'onHand', header: 'On hand', render: (batch) => batch.onHandQuantity },
+    { key: 'sellable', header: 'Sellable', render: (batch) => batch.sellableQuantity },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (batch) => (
+        <StatusBadge
+          label={batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
+          tone={batch.isExpired ? 'danger' : statusTone(batch.status)}
+        />
+      ),
+    },
+  ];
 
   return (
-    <div className="tableShell">
-      <table>
-        <thead>
-          <tr>
-            <th>Batch</th>
-            <th>Warehouse</th>
-            <th>Expiry</th>
-            <th>On hand</th>
-            <th>Sellable</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {batches.map((batch) => (
-            <tr key={batch.id}>
-              <td>{batch.batchNumber}</td>
-              <td>{batch.warehouse?.name ?? 'Not recorded'}</td>
-              <td>{formatDateTime(batch.expiryDate)}</td>
-              <td>{batch.onHandQuantity}</td>
-              <td>{batch.sellableQuantity}</td>
-              <td>
-                <span
-                  className={`statusBadge ${batch.isExpired ? 'danger' : statusTone(batch.status)}`}
-                >
-                  {batch.isExpired ? 'Expired' : labelFromCode(batch.status)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      caption="Linked offer inventory"
+      columns={columns}
+      emptyDescription="Eligible stock rows for this offer will appear here."
+      emptyTitle="No eligible stock rows"
+      rowKey={(batch) => batch.id}
+      rows={batches}
+    />
   );
 }
 
@@ -305,9 +332,12 @@ function OfferOperationsPanel({ offer }: { offer: DistributorOffer }) {
             placeholder="Pause reason"
             required
           />
-          <button className="primaryButton" disabled={!pausable} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Pause this distributor offer with the recorded reason?"
+            disabled={!pausable}
+          >
             Pause Offer
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={reactivateOfferAction} className="decisionForm">
           <input name="offerId" type="hidden" value={offer.id} />
@@ -319,9 +349,12 @@ function OfferOperationsPanel({ offer }: { offer: DistributorOffer }) {
             placeholder="Reactivation reason"
             required
           />
-          <button className="primaryButton" disabled={!reactivatable} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Reactivate this distributor offer?"
+            disabled={!reactivatable}
+          >
             Reactivate Offer
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={archiveOfferAction} className="decisionForm">
           <input name="offerId" type="hidden" value={offer.id} />
@@ -333,9 +366,13 @@ function OfferOperationsPanel({ offer }: { offer: DistributorOffer }) {
             placeholder="Archive reason"
             required
           />
-          <button className="dangerButton" disabled={!archivable} type="submit">
+          <ConfirmSubmitButton
+            className="dangerButton"
+            confirmMessage="Archive this distributor offer with the recorded reason?"
+            disabled={!archivable}
+          >
             Archive Offer
-          </button>
+          </ConfirmSubmitButton>
         </form>
       </div>
     </section>
@@ -362,9 +399,12 @@ function OfferReviewPanel({ offer, ready }: { offer: DistributorOffer; ready: bo
             type="hidden"
             value="Offer price, stock and serviceability verified."
           />
-          <button className="primaryButton" disabled={!ready || !reviewable} type="submit">
+          <ConfirmSubmitButton
+            confirmMessage="Approve this distributor offer for publication?"
+            disabled={!ready || !reviewable}
+          >
             Approve Offer
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={reviewOfferAction} className="decisionForm">
           <input name="offerId" type="hidden" value={offer.id} />
@@ -377,9 +417,13 @@ function OfferReviewPanel({ offer, ready }: { offer: DistributorOffer; ready: bo
             placeholder="Rejection reason"
             required
           />
-          <button className="dangerButton" disabled={!reviewable} type="submit">
+          <ConfirmSubmitButton
+            className="dangerButton"
+            confirmMessage="Reject this distributor offer with the recorded reason?"
+            disabled={!reviewable}
+          >
             Reject Offer
-          </button>
+          </ConfirmSubmitButton>
         </form>
       </div>
     </section>
@@ -418,7 +462,25 @@ function formatSla(value?: number | null): string {
   return value === 1 ? '1 day' : `${value} days`;
 }
 
-function statusTone(status: string) {
+function buildOfferDetailHref(
+  offerId: string,
+  batchPage: number,
+  auditPage: number,
+  anchor: 'offer-inventory' | 'offer-audit-history',
+): string {
+  const params = new URLSearchParams();
+  if (batchPage > 1) params.set('batchPage', String(batchPage));
+  if (auditPage > 1) params.set('auditPage', String(auditPage));
+  const query = params.toString();
+  return `/offers/${offerId}${query ? `?${query}` : ''}#${anchor}`;
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function statusTone(status: string): 'ok' | 'warn' | 'danger' {
   if (status === 'ACTIVE' || status === 'APPROVED') {
     return 'ok';
   }

@@ -1,278 +1,179 @@
 import Link from 'next/link';
-import type {
-  OnboardingQueueItem,
-  OrganisationStatus,
-  OrganisationType,
-} from '@vardhnam/api-client';
 import { BusinessShell } from '../components/business-shell';
-import { formatDateTime, labelFromCode } from '../lib/format';
-import { loadApprovalQueue, loadAuditLogs } from '../lib/marketplace-api';
+import { EmptyState } from '../components/empty-state';
+import { readPortalSession } from '../lib/auth-session';
+import { loadDashboardSummary, type DashboardItem, type DashboardScope } from '../lib/marketplace-api';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Record<string, string | string[] | undefined>;
-type OnboardingTypeFilter = Extract<OrganisationType, 'COMPANY' | 'DISTRIBUTOR'>;
+/**
+ * The true portal home. Every role gets `dashboards:read` (checked in
+ * `apps/marketplace-api/src/access/permission-codes.ts`), so this is the one
+ * page every authenticated session can reach -- `portalLandingPath` in
+ * `lib/portal-access.ts` puts `/` first in its candidate list for exactly
+ * that reason.
+ *
+ * Replaces the previous portal home, which rendered the onboarding queue
+ * (now at `/onboarding`) regardless of role, and the dead `RoleDashboard`
+ * component, which rendered hardcoded copy from `portal-copy.ts` that never
+ * reflected real data.
+ *
+ * Each item the backend returns is scoped (`PLATFORM` / `ORGANISATION` /
+ * `SELF`) and permission-filtered server-side -- this only decides where a
+ * given item code links to. A code only gets a link when every role that can
+ * see it (per `dashboards.service.ts`'s `buildItemDefinitions`) can also
+ * reach the target route; several `SELF`-scope items (promoter attributions,
+ * delivery assignments) have no portal surface at all yet and stay
+ * unlinked rather than pointing at a route that would 403.
+ */
+export default async function DashboardPage() {
+  const [result, session] = await Promise.all([loadDashboardSummary(), readPortalSession()]);
+  const items = result.ok ? result.data.items : [];
+  const canExport = session?.permissions.includes('dashboards:export') ?? false;
 
-interface HomePageProps {
-  searchParams?: Promise<SearchParams>;
-}
-
-const statusFilterValues: OrganisationStatus[] = [
-  'PENDING_VERIFICATION',
-  'ACTIVE',
-  'REJECTED',
-  'SUSPENDED',
-];
-
-export default async function Home({ searchParams }: HomePageProps) {
-  const resolvedSearchParams = (await searchParams) ?? {};
-  const type = parseOnboardingType(readParam(resolvedSearchParams.type));
-  const status = parseStatus(readParam(resolvedSearchParams.status)) ?? 'PENDING_VERIFICATION';
-  const approvalQueueQuery = {
-    status,
-    page: 1,
-    limit: 25,
-    ...(type ? { type } : {}),
-  };
-  const queueResult = await loadApprovalQueue(approvalQueueQuery);
-  const auditResult = await loadAuditLogs({ page: 1, limit: 6 });
-  const queueItems = queueResult.ok ? queueResult.data.items : [];
-  const readyCount = queueItems.filter((item) => item.missingRequirements.length === 0).length;
-  const blockedCount = queueItems.length - readyCount;
   const statuses = [
     {
-      label: queueResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
-      tone: queueResult.config.configured ? ('ok' as const) : ('danger' as const),
+      label: result.config.configured ? 'Authenticated session' : 'Session missing',
+      tone: result.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
-      label: queueResult.ok ? `${queueItems.length} queue items` : 'API not connected',
-      tone: queueResult.ok ? ('ok' as const) : ('warn' as const),
+      label: result.ok ? 'Dashboards API connected' : 'API not connected',
+      tone: result.ok ? ('ok' as const) : ('warn' as const),
     },
-    { label: 'Provider mocks only', tone: 'warn' as const },
   ];
 
+  const grouped = groupByScope(items);
+
   return (
-    <BusinessShell
-      active="onboarding"
-      eyebrow="Operations manager"
-      statuses={statuses}
-      title="Onboarding Approval Queue"
-    >
-      <section className="metricStrip" aria-label="Onboarding queue metrics">
-        <article className="metricCard">
-          <p className="metricValue">{queueItems.length}</p>
-          <p className="metricLabel">Filtered organisations</p>
-        </article>
-        <article className="metricCard">
-          <p className="metricValue">{readyCount}</p>
-          <p className="metricLabel">Ready for organisation approval</p>
-        </article>
-        <article className="metricCard">
-          <p className="metricValue">{blockedCount}</p>
-          <p className="metricLabel">Missing profile or approved KYC</p>
-        </article>
-      </section>
+    <BusinessShell active="dashboard" eyebrow="Operational summary" statuses={statuses} title="Dashboard">
+      <div className="breadcrumbRow">
+        <p className="mutedText">
+          Counts are scoped to your permissions and refresh on every visit.
+        </p>
+        {canExport ? (
+          <a className="secondaryButton" href="/dashboard-export">
+            Export CSV
+          </a>
+        ) : null}
+      </div>
 
-      <section className="toolbar" aria-label="Onboarding filters">
-        <div className="segmentedControl">
-          <FilterLink active={!type} href={buildQueueHref(undefined, status)} label="All" />
-          <FilterLink
-            active={type === 'COMPANY'}
-            href={buildQueueHref('COMPANY', status)}
-            label="Companies"
-          />
-          <FilterLink
-            active={type === 'DISTRIBUTOR'}
-            href={buildQueueHref('DISTRIBUTOR', status)}
-            label="Distributors"
-          />
-        </div>
-        <div className="segmentedControl">
-          {statusFilterValues.map((statusValue) => (
-            <FilterLink
-              active={status === statusValue}
-              href={buildQueueHref(type, statusValue)}
-              key={statusValue}
-              label={labelFromCode(statusValue)}
-            />
-          ))}
-        </div>
-      </section>
-
-      {!queueResult.ok ? (
-        <ConnectionPanel
-          error={queueResult.error}
-          missingVariables={queueResult.config.missingVariables}
+      {!result.ok ? (
+        <EmptyState description={result.error} title="Dashboard data is unavailable" />
+      ) : items.length === 0 ? (
+        <EmptyState
+          description="Your role has no dashboard items configured yet."
+          title="Nothing to show"
         />
       ) : (
-        <section className="queueList" aria-label="Onboarding organisations">
-          {queueItems.length === 0 ? (
-            <article className="emptyState">
-              <h3>No organisations in this filter</h3>
-              <p className="mutedText">
-                Pending company and distributor onboarding records will appear here.
-              </p>
-            </article>
-          ) : (
-            queueItems.map((item) => <QueueItemCard item={item} key={item.organisation.id} />)
-          )}
-        </section>
+        <>
+          <ScopeSection
+            description="Counts across the whole marketplace."
+            items={grouped.PLATFORM}
+            title="Platform"
+          />
+          <ScopeSection
+            description="Counts for your organisation."
+            items={grouped.ORGANISATION}
+            title="Your organisation"
+          />
+          <ScopeSection description="Counts assigned to you personally." items={grouped.SELF} title="Your work" />
+        </>
       )}
-
-      <section className="auditPreview" aria-label="Recent audit activity">
-        <div className="sectionHeader">
-          <div>
-            <p className="eyebrow">Audit</p>
-            <h3>Recent Review Activity</h3>
-          </div>
-          <Link className="textLink" href="/audit">
-            Open audit view
-          </Link>
-        </div>
-        {!auditResult.ok ? (
-          <p className="mutedText">{auditResult.error}</p>
-        ) : (
-          <div className="tableShell">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Action</th>
-                  <th>Resource</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditResult.data.items.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{formatDateTime(entry.createdAt)}</td>
-                    <td>{labelFromCode(entry.action)}</td>
-                    <td>{entry.resourceType}</td>
-                    <td>{entry.reason ?? 'Not recorded'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
     </BusinessShell>
   );
 }
 
-function QueueItemCard({ item }: { item: OnboardingQueueItem }) {
-  const profile =
-    item.organisation.type === 'COMPANY'
-      ? item.organisation.companyProfile
-      : item.organisation.distributorProfile;
-  const location = [profile?.city, profile?.state, profile?.pincode].filter(Boolean).join(', ');
+function ScopeSection({
+  title,
+  description,
+  items,
+}: {
+  title: string;
+  description: string;
+  items: DashboardItem[];
+}) {
+  if (items.length === 0) {
+    return null;
+  }
 
   return (
-    <article className="queueCard reviewCard">
-      <div className="queueCardMain">
-        <div className="rowHeader">
-          <div>
-            <p className="eyebrow">{labelFromCode(item.organisation.type)}</p>
-            <h3>{item.organisation.displayName}</h3>
-          </div>
-          <StatusBadge status={item.organisation.status} />
-        </div>
-        <dl className="definitionGrid">
-          <div>
-            <dt>Legal name</dt>
-            <dd>{item.organisation.legalName}</dd>
-          </div>
-          <div>
-            <dt>Location</dt>
-            <dd>{location || 'Not recorded'}</dd>
-          </div>
-          <div>
-            <dt>KYC metadata</dt>
-            <dd>
-              {item.approvedDocumentCount} approved / {item.submittedDocumentCount} submitted
-            </dd>
-          </div>
-        </dl>
-        <div className="requirementList">
-          {item.missingRequirements.length === 0 ? (
-            <span className="statusBadge ok">Ready</span>
-          ) : (
-            item.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
-            ))
-          )}
+    <section aria-label={title} className="auditPreview">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{description}</p>
+          <h3>{title}</h3>
         </div>
       </div>
-      <Link className="queueAction" href={`/onboarding/${item.organisation.id}`}>
-        Review
-      </Link>
-    </article>
-  );
-}
-
-function FilterLink({ active, href, label }: { active: boolean; href: string; label: string }) {
-  return (
-    <Link
-      aria-current={active ? 'page' : undefined}
-      className={active ? 'selected' : undefined}
-      href={href}
-    >
-      {label}
-    </Link>
-  );
-}
-
-function StatusBadge({ status }: { status: OrganisationStatus }) {
-  const tone = status === 'ACTIVE' ? 'ok' : status === 'REJECTED' ? 'danger' : 'warn';
-  return <span className={`statusBadge ${tone}`}>{labelFromCode(status)}</span>;
-}
-
-function ConnectionPanel({
-  error,
-  missingVariables,
-}: {
-  error: string;
-  missingVariables: string[];
-}) {
-  return (
-    <section className="emptyState" aria-label="API connection status">
-      <h3>Business API Connection Blocked</h3>
-      <p className="mutedText">{error}</p>
-      {missingVariables.length > 0 ? (
-        <ul className="compactList">
-          {missingVariables.map((variable) => (
-            <li key={variable}>{variable}</li>
-          ))}
-        </ul>
-      ) : null}
+      <section className="metricStrip">
+        {items.map((item) => (
+          <DashboardCard item={item} key={item.code} />
+        ))}
+      </section>
     </section>
   );
 }
 
-function buildQueueHref(
-  type: OnboardingTypeFilter | undefined,
-  status: OrganisationStatus,
-): string {
-  const params = new URLSearchParams({ status });
-  if (type) {
-    params.set('type', type);
+function DashboardCard({ item }: { item: DashboardItem }) {
+  const href = dashboardItemHref(item.code);
+  const card = (
+    <article className="metricCard">
+      <p className="metricValue">{item.count}</p>
+      <p className="metricLabel">{item.label}</p>
+    </article>
+  );
+
+  return href ? (
+    <Link aria-label={`${item.label}: ${item.count}. Open work queue.`} href={href}>
+      {card}
+    </Link>
+  ) : (
+    card
+  );
+}
+
+function groupByScope(items: DashboardItem[]): Record<DashboardScope, DashboardItem[]> {
+  return {
+    PLATFORM: items.filter((item) => item.scope === 'PLATFORM'),
+    ORGANISATION: items.filter((item) => item.scope === 'ORGANISATION'),
+    SELF: items.filter((item) => item.scope === 'SELF'),
+  };
+}
+
+/**
+ * Maps a dashboard item code to its filtered work queue. Every route named
+ * here is reachable by every role that can see the corresponding item --
+ * see `dashboards.service.ts` for exactly which permission gates each code,
+ * and `lib/portal-access.ts` for the route's own permission gate. Codes with
+ * no portal surface yet (own-scope promoter attributions, delivery
+ * assignments) intentionally return `undefined`.
+ */
+function dashboardItemHref(code: string): string | undefined {
+  switch (code) {
+    case 'onboarding_pending':
+      return '/onboarding?status=PENDING_VERIFICATION';
+    case 'catalogue_pending_review':
+    case 'catalogue_pending_review_own':
+      return '/catalogue';
+    case 'offers_pending_review':
+    case 'offers_pending_review_own':
+      return '/offers';
+    case 'support_tickets_open_any':
+      return '/support';
+    case 'tally_sync_pending':
+      return '/tally';
+    case 'notifications_failed':
+      return '/notifications?status=FAILED';
+    case 'settlements_eligible':
+      return '/finance/settlements';
+    case 'commission_entries_provisional':
+      return '/finance/commissions?entryStatus=PROVISIONAL';
+    case 'payout_accounts_pending_verification':
+      return '/payouts/accounts?status=PENDING_VERIFICATION';
+    case 'fulfilment_orders_pending_own':
+      return '/orders';
+    case 'my_payout_account_action_needed':
+      return '/payouts/statements';
+    default:
+      return undefined;
   }
-
-  return `/?${params.toString()}`;
-}
-
-function readParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function parseOnboardingType(value: string | undefined): OnboardingTypeFilter | undefined {
-  return value === 'COMPANY' || value === 'DISTRIBUTOR' ? value : undefined;
-}
-
-function parseStatus(value: string | undefined): OrganisationStatus | undefined {
-  return statusFilterValues.includes(value as OrganisationStatus)
-    ? (value as OrganisationStatus)
-    : undefined;
 }

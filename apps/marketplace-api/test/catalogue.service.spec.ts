@@ -149,6 +149,30 @@ describe('CatalogueService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('blocks product submission when an active variant lacks tax metadata', async () => {
+    const product = productFixture({
+      brandStatus: CatalogueStatus.APPROVED,
+      variants: [variantFixture(null, null)],
+      documents: [documentFixture()],
+    });
+    const service = new CatalogueService(
+      {
+        organisation: { findUnique: jest.fn().mockResolvedValue(activeCompanyOrganisation) },
+        masterProduct: { findUnique: jest.fn().mockResolvedValue(product) },
+      } as never,
+      { record: jest.fn() } as never,
+      accessService as never,
+    );
+
+    await expect(
+      service.submitProduct(product.id, { reason: 'Ready for review' }, companyActor),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        message: expect.stringContaining('VARIANT_TAX_METADATA'),
+      }),
+    });
+  });
+
   it('approves a ready product and records reviewer audit', async () => {
     const product = productFixture({
       brandStatus: CatalogueStatus.APPROVED,
@@ -256,7 +280,7 @@ function productFixture({
   };
 }
 
-function variantFixture() {
+function variantFixture(hsnCode: string | null = '1008', gstRateBps: number | null = 500) {
   return {
     id: 'variant-1',
     productId: 'product-1',
@@ -265,6 +289,8 @@ function variantFixture() {
     packSize: new Prisma.Decimal(1),
     packUnit: 'kg',
     mrpPaise: 125000,
+    hsnCode,
+    gstRateBps,
     isActive: true,
     createdAt: new Date('2026-08-01T00:00:00.000Z'),
     updatedAt: new Date('2026-08-01T00:00:00.000Z'),

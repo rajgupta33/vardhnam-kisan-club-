@@ -122,6 +122,23 @@ describe('Phase 2D marketplace product discovery', () => {
     });
   });
 
+  it('returns authoritative stocked filter options for a pincode', async () => {
+    if (!app) throw new Error('Nest application did not boot');
+
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/marketplace/products/filter-options')
+      .query({ pincode: '302001' })
+      .expect(200);
+
+    expect(response.body.data.categories).toContain('Seeds');
+    expect(response.body.data.cropTargets).toContain('Bajra');
+    expect(response.body.data.brands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Phase 2D Seed Brand' }),
+      ]),
+    );
+  });
+
   it('returns product detail without private catalogue document storage fields', async () => {
     if (!app) {
       throw new Error('Nest application did not boot');
@@ -209,6 +226,8 @@ async function seedMarketplaceDiscoveryData(): Promise<string> {
       variantName: '1 kg pack',
       packSize: new Prisma.Decimal(1),
       packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       mrpPaise: 125000,
     },
   });

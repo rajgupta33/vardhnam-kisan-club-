@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import type { DistributorOfferStatus, OfferQueueItem } from '@vardhnam/api-client';
 import { BusinessShell } from '../../components/business-shell';
+import { EmptyState } from '../../components/empty-state';
+import { Pagination } from '../../components/pagination';
+import { StatusBadge } from '../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../lib/format';
 import { loadOfferReviewQueue } from '../../lib/marketplace-api';
 
@@ -20,24 +23,27 @@ const offerStatusValues: DistributorOfferStatus[] = [
   'PAUSED',
   'ARCHIVED',
 ];
+const limit = 25;
 
 export default async function OffersPage({ searchParams }: OffersPageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const status = parseOfferStatus(readParam(resolvedSearchParams.status)) ?? 'SUBMITTED';
   const q = readParam(resolvedSearchParams.q);
+  const page = parsePage(readParam(resolvedSearchParams.page));
   const offerQuery = {
     status,
     ...(q ? { q } : {}),
-    page: 1,
-    limit: 25,
+    page,
+    limit,
   };
   const offerResult = await loadOfferReviewQueue(offerQuery);
   const items = offerResult.ok ? offerResult.data.items : [];
+  const total = offerResult.ok ? offerResult.data.total : 0;
   const readyOffers = items.filter((item) => item.missingRequirements.length === 0).length;
   const totalAvailableQuantity = items.reduce((total, item) => total + item.availableQuantity, 0);
   const statuses = [
     {
-      label: offerResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: offerResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: offerResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -74,7 +80,7 @@ export default async function OffersPage({ searchParams }: OffersPageProps) {
           {offerStatusValues.map((statusValue) => (
             <FilterLink
               active={status === statusValue}
-              href={buildOffersHref(statusValue, q)}
+              href={buildOffersHref(statusValue, q, 1)}
               key={statusValue}
               label={labelFromCode(statusValue)}
             />
@@ -90,10 +96,7 @@ export default async function OffersPage({ searchParams }: OffersPageProps) {
       </section>
 
       {!offerResult.ok ? (
-        <section className="emptyState">
-          <h3>Offer API Connection Blocked</h3>
-          <p className="mutedText">{offerResult.error}</p>
-        </section>
+        <EmptyState description={offerResult.error} title="Offer API Connection Blocked" />
       ) : (
         <section className="queueList" aria-label="Distributor offer review queue">
           <div className="sectionHeader">
@@ -103,13 +106,19 @@ export default async function OffersPage({ searchParams }: OffersPageProps) {
             </div>
           </div>
           {items.length === 0 ? (
-            <article className="emptyState">
-              <h3>No distributor offers</h3>
-              <p className="mutedText">Submitted distributor offers will appear here.</p>
-            </article>
+            <EmptyState
+              description="Submitted distributor offers will appear here."
+              title="No distributor offers"
+            />
           ) : (
             items.map((item) => <OfferQueueCard item={item} key={item.offer.id} />)
           )}
+          <Pagination
+            buildHref={(targetPage) => buildOffersHref(status, q, targetPage)}
+            limit={limit}
+            page={page}
+            total={total}
+          />
         </section>
       )}
     </BusinessShell>
@@ -131,9 +140,7 @@ function OfferQueueCard({ item }: { item: OfferQueueItem }) {
             </p>
             <h3>{offer.product.name}</h3>
           </div>
-          <span className={`statusBadge ${offer.status === 'APPROVED' ? 'ok' : 'warn'}`}>
-            {labelFromCode(offer.status)}
-          </span>
+          <StatusBadge label={labelFromCode(offer.status)} tone={offerStatusTone(offer.status)} />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Variant" value={offer.variant.variantName} />
@@ -145,12 +152,14 @@ function OfferQueueCard({ item }: { item: OfferQueueItem }) {
         </dl>
         <div className="requirementList">
           {ready ? (
-            <span className="statusBadge ok">Ready</span>
+            <StatusBadge label="Ready" tone="ok" />
           ) : (
             item.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
+              <StatusBadge
+                key={requirement}
+                label={`Missing ${labelFromCode(requirement)}`}
+                tone="warn"
+              />
             ))
           )}
         </div>
@@ -191,13 +200,31 @@ function DetailField({
   );
 }
 
-function buildOffersHref(status: DistributorOfferStatus, q: string | undefined): string {
+function buildOffersHref(
+  status: DistributorOfferStatus,
+  q: string | undefined,
+  page: number,
+): string {
   const params = new URLSearchParams({ status });
   if (q) {
     params.set('q', q);
   }
+  if (page > 1) {
+    params.set('page', String(page));
+  }
 
   return `/offers?${params.toString()}`;
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function offerStatusTone(status: DistributorOfferStatus): 'ok' | 'warn' | 'danger' {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED' || status === 'ARCHIVED') return 'danger';
+  return 'warn';
 }
 
 function formatPaise(value: number): string {

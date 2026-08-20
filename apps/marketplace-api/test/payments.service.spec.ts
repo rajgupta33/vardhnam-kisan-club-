@@ -12,6 +12,7 @@ import {
 import { PermissionCode } from '../src/access/permission-codes';
 import type { CurrentUser } from '../src/auth/current-user.interface';
 import { MockPaymentOutcome } from '../src/payments/dto/confirm-mock-payment-intent.dto';
+import { PaymentSettlementService } from '../src/payments/payment-settlement.service';
 import { PaymentsService } from '../src/payments/payments.service';
 
 const farmerUserId = '00000000-0000-4000-8000-000000005101';
@@ -33,6 +34,44 @@ const financeService = {
   recordFarmerPayment: jest.fn().mockResolvedValue(undefined),
 };
 
+const notificationEventsService = {
+  emitPaymentEvent: jest.fn().mockResolvedValue(undefined),
+};
+
+/**
+ * A gateway that mints the reference it was handed. The mock provider does the
+ * same thing; stubbing it here keeps these unit tests free of config and Prisma.
+ */
+const providerRegistry = {
+  current: () => ({
+    name: 'mock',
+    mode: PaymentProviderMode.MOCK,
+    createIntent: jest.fn(async (input: { reference: string }) => ({
+      providerReference: input.reference,
+    })),
+  }),
+};
+
+/**
+ * Builds the service the way Nest does, with a real settlement service over the
+ * mocked collaborators -- the settlement path is what these tests assert on, so
+ * stubbing it would leave them asserting nothing.
+ */
+function paymentsServiceWith(prisma: unknown, auditService: unknown, clubFulfilment?: unknown) {
+  return new PaymentsService(
+    prisma as never,
+    auditService as never,
+    accessService as never,
+    new PaymentSettlementService(
+      auditService as never,
+      financeService as never,
+      notificationEventsService as never,
+      clubFulfilment as never,
+    ),
+    providerRegistry as never,
+  );
+}
+
 describe('PaymentsService', () => {
   const farmerActor: CurrentUser = {
     userId: farmerUserId,
@@ -51,12 +90,7 @@ describe('PaymentsService', () => {
   });
 
   it('requires an idempotency key before mock payment creation', async () => {
-    const service = new PaymentsService(
-      {} as never,
-      { record: jest.fn() } as never,
-      accessService as never,
-      financeService as never,
-    );
+    const service = paymentsServiceWith({}, { record: jest.fn() });
 
     await expect(
       service.createMockPaymentIntent({ checkoutId }, farmerActor),
@@ -104,12 +138,7 @@ describe('PaymentsService', () => {
       },
     };
     const prisma = prismaWithIdempotency(tx);
-    const service = new PaymentsService(
-      prisma as never,
-      auditService as never,
-      accessService as never,
-      financeService as never,
-    );
+    const service = paymentsServiceWith(prisma, auditService);
 
     const result = await service.createMockPaymentIntent(
       {
@@ -169,10 +198,14 @@ describe('PaymentsService', () => {
         }),
       }),
     );
+    expect(notificationEventsService.emitPaymentEvent).not.toHaveBeenCalled();
   });
 
   it('confirms a successful mock payment and confirms child orders', async () => {
     const auditService = { record: jest.fn().mockResolvedValue({}) };
+    const clubFulfilmentService = {
+      createForConfirmedOrders: jest.fn().mockResolvedValue(undefined),
+    };
     const tx = {
       farmerProfile: {
         findUnique: jest.fn().mockResolvedValue(farmerProfileFixture()),
@@ -212,12 +245,7 @@ describe('PaymentsService', () => {
       },
     };
     const prisma = prismaWithIdempotency(tx);
-    const service = new PaymentsService(
-      prisma as never,
-      auditService as never,
-      accessService as never,
-      financeService as never,
-    );
+    const service = paymentsServiceWith(prisma, auditService, clubFulfilmentService);
 
     const result = await service.confirmMockPaymentIntent(
       paymentIntentId,
@@ -249,6 +277,22 @@ describe('PaymentsService', () => {
         resourceId: paymentIntentId,
       }),
       tx,
+    );
+    expect(notificationEventsService.emitPaymentEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        event: 'PAYMENT_SUCCEEDED',
+        farmerProfileId,
+        productCheckoutId: checkoutId,
+        paymentIntentId,
+        amountPaise: 236000,
+      }),
+    );
+    expect(clubFulfilmentService.createForConfirmedOrders).toHaveBeenCalledWith(
+      tx,
+      expect.arrayContaining([expect.objectContaining({ id: orderId })]),
+      farmerActor,
+      'req-payment-confirm-1',
     );
   });
 
@@ -298,12 +342,7 @@ describe('PaymentsService', () => {
       },
     };
     const prisma = prismaWithIdempotency(tx);
-    const service = new PaymentsService(
-      prisma as never,
-      auditService as never,
-      accessService as never,
-      financeService as never,
-    );
+    const service = paymentsServiceWith(prisma, auditService);
 
     const result = await service.confirmMockPaymentIntent(
       paymentIntentId,
@@ -335,6 +374,16 @@ describe('PaymentsService', () => {
         resourceId: paymentIntentId,
       }),
       tx,
+    );
+    expect(notificationEventsService.emitPaymentEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        event: 'PAYMENT_FAILED',
+        farmerProfileId,
+        productCheckoutId: checkoutId,
+        paymentIntentId,
+        amountPaise: 236000,
+      }),
     );
   });
 });

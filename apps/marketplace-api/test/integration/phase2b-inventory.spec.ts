@@ -128,7 +128,9 @@ describe('Phase 2B inventory foundation workflow', () => {
         sku: `P2B-1KG-${suffix.slice(0, 8)}`,
         variantName: '1 kg pack',
         packSize: new Prisma.Decimal(1),
-        packUnit: 'kg',
+      packUnit: 'kg',
+      hsnCode: '1008',
+      gstRateBps: 500,
       },
     });
     variantId = variant.id;

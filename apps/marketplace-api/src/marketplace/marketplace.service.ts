@@ -1,16 +1,23 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   CatalogueStatus,
   DistributorOfferStatus,
   InventoryBatchStatus,
   OrganisationStatus,
   Prisma,
+  StoredFileStatus,
   WarehouseStatus,
 } from '@prisma/client';
+import {
+  STORAGE_PROVIDER,
+  type StorageProvider,
+} from '../storage/storage.provider.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ListMarketplaceProductsQueryDto } from './dto/list-marketplace-products-query.dto';
+import type { MarketplaceFilterOptionsQueryDto } from './dto/marketplace-filter-options-query.dto';
 import type { MarketplaceProductDetailQueryDto } from './dto/marketplace-product-detail-query.dto';
 
 const discoveryOfferInclude = Prisma.validator<Prisma.DistributorOfferInclude>()({
@@ -35,6 +42,7 @@ const discoveryOfferInclude = Prisma.validator<Prisma.DistributorOfferInclude>()
       documents: {
         orderBy: { createdAt: 'asc' },
       },
+      primaryImage: { select: { id: true, status: true } },
     },
   },
   variant: true,
@@ -52,15 +60,90 @@ interface EligibleOffer {
   availableQuantity: number;
 }
 
+export interface MarketplaceProgrammeEligibility {
+  productId: string;
+  variantId: string | null;
+  displayPriority: number;
+  programmeId: string;
+}
+
+export interface MarketplaceDiscoveryOptions {
+  programmeEligibility?: MarketplaceProgrammeEligibility[];
+}
+
 @Injectable()
 export class MarketplaceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+    @Inject(STORAGE_PROVIDER) private readonly storage: StorageProvider,
+  ) {}
 
-  async listProducts(query: ListMarketplaceProductsQueryDto) {
+  /**
+   * A stable public URL for a product pack shot, or null when there is none.
+   *
+   * Deliberately *not* a signed URL embedded in the payload. Discovery results
+   * are cached on the device for 24 hours, and a short-lived signature would
+   * expire inside that window, turning every cached product into a broken
+   * image. This URL never expires; the endpoint behind it mints a fresh
+   * signature per request.
+   *
+   * Only an `AVAILABLE` image is advertised, so an upload still awaiting its
+   * virus scan is never linked.
+   */
+  private productImageUrl(product: {
+    id: string;
+    primaryImage?: { status: StoredFileStatus } | null;
+  }): string | null {
+    if (product.primaryImage?.status !== StoredFileStatus.AVAILABLE) {
+      return null;
+    }
+
+    const baseUrl = (this.configService.get<string>('PUBLIC_API_BASE_URL') ?? '').replace(
+      /\/$/,
+      '',
+    );
+    const prefix = this.configService.get<string>('API_PREFIX') ?? 'api/v1';
+    return `${baseUrl}/${prefix}/marketplace/products/${product.id}/image`;
+  }
+
+  /**
+   * Resolves the short-lived storage URL a product image redirect should land
+   * on. Product pack shots are public marketing material, unlike the
+   * permission-checked, audited downloads in `FilesService`.
+   */
+  async getProductImageTarget(productId: string): Promise<string | undefined> {
+    const product = await this.prisma.masterProduct.findFirst({
+      where: {
+        id: productId,
+        status: CatalogueStatus.APPROVED,
+        primaryImage: { status: StoredFileStatus.AVAILABLE },
+      },
+      select: { primaryImage: { select: { objectKey: true } } },
+    });
+
+    if (!product?.primaryImage) {
+      return undefined;
+    }
+
+    const target = await this.storage.getDownloadUrl(product.primaryImage.objectKey, 300);
+    return target.url;
+  }
+
+  async listProducts(
+    query: ListMarketplaceProductsQueryDto,
+    options: MarketplaceDiscoveryOptions = {},
+  ) {
     const { page, limit } = paginationOffset(query);
-    const offers = await this.findCandidateOffers(query);
+    if (options.programmeEligibility?.length === 0) {
+      return { items: [], page, limit, total: 0 };
+    }
+    const offers = await this.findCandidateOffers(query, options);
     const eligibleOffers = await this.toEligibleOffers(offers);
-    const productSummaries = this.toProductSummaries(eligibleOffers, query.pincode);
+    const productSummaries = this.sortForDiscoveryOptions(
+      this.toProductSummaries(eligibleOffers, query.pincode),
+      options,
+    );
     const start = (page - 1) * limit;
     const items = productSummaries.slice(start, start + limit);
 
@@ -72,11 +155,24 @@ export class MarketplaceService {
     };
   }
 
-  async getProduct(productId: string, query: MarketplaceProductDetailQueryDto) {
-    const offers = await this.findCandidateOffers({
-      pincode: query.pincode,
-      productId,
-    });
+  async getProduct(
+    productId: string,
+    query: MarketplaceProductDetailQueryDto,
+    options: MarketplaceDiscoveryOptions = {},
+  ) {
+    if (options.programmeEligibility?.length === 0) {
+      throw new NotFoundException({
+        code: ApiErrorCode.NOT_FOUND,
+        message: 'Marketplace product was not found for this pincode',
+      });
+    }
+    const offers = await this.findCandidateOffers(
+      {
+        pincode: query.pincode,
+        productId,
+      },
+      options,
+    );
     const eligibleOffers = await this.toEligibleOffers(offers);
     const productSummaries = this.toProductSummaries(eligibleOffers, query.pincode);
     const product = productSummaries[0];
@@ -94,13 +190,15 @@ export class MarketplaceService {
       ...product,
       description: sourceProduct?.description ?? null,
       variants:
-        sourceProduct?.variants.map((variant) => ({
+        sourceProduct?.variants
+          .filter((variant) => this.variantAllowedByProgramme(productId, variant.id, options))
+          .map((variant) => ({
           id: variant.id,
           variantName: variant.variantName,
           packSize: variant.packSize.toString(),
           packUnit: variant.packUnit,
           mrpPaise: variant.mrpPaise,
-        })) ?? [],
+          })) ?? [],
       documents:
         sourceProduct?.documents.map((document) => ({
           id: document.id,
@@ -113,9 +211,34 @@ export class MarketplaceService {
     };
   }
 
+  async getFilterOptions(query: MarketplaceFilterOptionsQueryDto) {
+    const offers = await this.findCandidateOffers(query);
+    const eligibleOffers = await this.toEligibleOffers(offers);
+    const products = new Map(
+      eligibleOffers.map(({ offer }) => [offer.productId, offer.product]),
+    );
+    const productValues = Array.from(products.values());
+    const brands = new Map(
+      productValues.map((product) => [product.brand.id, {
+        id: product.brand.id,
+        name: product.brand.name,
+        slug: product.brand.slug,
+      }]),
+    );
+
+    return {
+      categories: this.sortedUnique(productValues.map((product) => product.category)),
+      brands: Array.from(brands.values()).sort((left, right) =>
+        left.name.localeCompare(right.name),
+      ),
+      cropTargets: this.sortedUnique(productValues.flatMap((product) => product.cropTargets)),
+    };
+  }
+
   private async findCandidateOffers(
     query:
       ListMarketplaceProductsQueryDto | (MarketplaceProductDetailQueryDto & { productId: string }),
+    options: MarketplaceDiscoveryOptions = {},
   ): Promise<DiscoveryOffer[]> {
     const productWhere: Prisma.MasterProductWhereInput = {
       status: CatalogueStatus.APPROVED,
@@ -135,6 +258,26 @@ export class MarketplaceService {
       },
     };
 
+    if (options.programmeEligibility) {
+      const productWideIds = options.programmeEligibility
+        .filter((item) => item.variantId === null)
+        .map((item) => item.productId);
+      const variantEntries = options.programmeEligibility.filter(
+        (item): item is MarketplaceProgrammeEligibility & { variantId: string } =>
+          item.variantId !== null,
+      );
+      const programmeScope: Prisma.DistributorOfferWhereInput = {
+        OR: [
+          ...(productWideIds.length > 0 ? [{ productId: { in: productWideIds } }] : []),
+          ...variantEntries.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId,
+          })),
+        ],
+      };
+      where.AND = [programmeScope];
+    }
+
     if ('productId' in query) {
       where.productId = query.productId;
     }
@@ -149,6 +292,9 @@ export class MarketplaceService {
         slug: { equals: query.brandSlug, mode: 'insensitive' },
         status: CatalogueStatus.APPROVED,
       };
+    }
+    if ('cropTarget' in query && query.cropTarget) {
+      productWhere.cropTargets = { has: query.cropTarget };
     }
     if ('q' in query && query.q) {
       where.OR = [
@@ -217,6 +363,7 @@ export class MarketplaceService {
           slug: product.slug,
           category: product.category,
           cropTargets: product.cropTargets,
+          primaryImageUrl: this.productImageUrl(product),
           brand: {
             id: product.brand.id,
             name: product.brand.name,
@@ -309,5 +456,49 @@ export class MarketplaceService {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     return today;
+  }
+
+  private sortedUnique(values: string[]): string[] {
+    const byNormalizedValue = new Map<string, string>();
+    for (const value of values) {
+      const trimmed = value.trim();
+      if (trimmed) byNormalizedValue.set(trimmed.toLocaleLowerCase(), trimmed);
+    }
+    return Array.from(byNormalizedValue.values()).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+
+  private sortForDiscoveryOptions<
+    TProduct extends { id: string; lowestPricePaise: number },
+  >(products: TProduct[], options: MarketplaceDiscoveryOptions): TProduct[] {
+    if (!options.programmeEligibility) return products;
+    const priorities = new Map<string, number>();
+    for (const item of options.programmeEligibility) {
+      priorities.set(
+        item.productId,
+        Math.max(priorities.get(item.productId) ?? Number.MIN_SAFE_INTEGER, item.displayPriority),
+      );
+    }
+    return products.sort(
+      (left, right) =>
+        (priorities.get(right.id) ?? 0) - (priorities.get(left.id) ?? 0) ||
+        left.lowestPricePaise - right.lowestPricePaise,
+    );
+  }
+
+  private variantAllowedByProgramme(
+    productId: string,
+    variantId: string,
+    options: MarketplaceDiscoveryOptions,
+  ): boolean {
+    if (!options.programmeEligibility) return true;
+    const programmes = options.programmeEligibility.filter(
+      (programme) => programme.productId === productId,
+    );
+    return (
+      programmes.some((programme) => programme.variantId === null) ||
+      programmes.some((programme) => programme.variantId === variantId)
+    );
   }
 }

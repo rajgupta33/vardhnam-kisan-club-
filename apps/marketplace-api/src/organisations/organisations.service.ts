@@ -15,6 +15,7 @@ import { AuditService, type AuditRecordInput } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { paginationOffset } from '../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../common/errors/api-error-codes';
+import { gstStateCode, normalizeGstin } from '../common/india-gst';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
@@ -111,6 +112,7 @@ export class OrganisationsService {
   }
 
   async create(dto: CreateOrganisationDto, actor: CurrentUser, requestId?: string) {
+    const gstin = dto.gstin ? normalizeGstin(dto.gstin) : null;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const organisation = await tx.organisation.create({
@@ -119,7 +121,8 @@ export class OrganisationsService {
             slug: dto.slug ?? this.slugify(dto.displayName),
             legalName: dto.legalName,
             displayName: dto.displayName,
-            gstin: dto.gstin ?? null,
+            gstin,
+            registeredStateCode: gstin ? gstStateCode(gstin) : null,
             status: dto.status ?? OrganisationStatus.PENDING_VERIFICATION,
           },
         });
@@ -166,7 +169,18 @@ export class OrganisationsService {
       data.displayName = dto.displayName;
     }
     if (dto.gstin !== undefined) {
-      data.gstin = dto.gstin;
+      const gstin = normalizeGstin(dto.gstin);
+      data.gstin = gstin;
+      data.registeredStateCode = gstStateCode(gstin);
+      if (gstin !== existing.gstin) {
+        data.gstinVerifiedAt = null;
+        if (existing.status === OrganisationStatus.ACTIVE) {
+          data.status = OrganisationStatus.PENDING_VERIFICATION;
+          data.reviewedAt = null;
+          data.reviewedBy = { disconnect: true };
+          data.reviewReason = null;
+        }
+      }
     }
 
     try {
@@ -186,6 +200,8 @@ export class OrganisationsService {
             legalName: existing.legalName,
             displayName: existing.displayName,
             gstin: existing.gstin,
+            registeredStateCode: existing.registeredStateCode,
+            gstinVerifiedAt: existing.gstinVerifiedAt?.toISOString() ?? null,
             status: existing.status,
           } satisfies Prisma.InputJsonObject,
           newValue: {
@@ -193,6 +209,8 @@ export class OrganisationsService {
             legalName: organisation.legalName,
             displayName: organisation.displayName,
             gstin: organisation.gstin,
+            registeredStateCode: organisation.registeredStateCode,
+            gstinVerifiedAt: organisation.gstinVerifiedAt?.toISOString() ?? null,
             status: organisation.status,
           } satisfies Prisma.InputJsonObject,
         });
@@ -223,6 +241,20 @@ export class OrganisationsService {
       dto.decision === OrganisationReviewDecision.APPROVE
         ? 'ORGANISATION_APPROVED'
         : 'ORGANISATION_REJECTED';
+    const verifiedStateCode =
+      dto.decision === OrganisationReviewDecision.APPROVE && existing.gstin
+        ? gstStateCode(existing.gstin)
+        : null;
+    if (
+      dto.decision === OrganisationReviewDecision.APPROVE &&
+      existing.type === OrganisationType.DISTRIBUTOR &&
+      !verifiedStateCode
+    ) {
+      throw new BadRequestException({
+        code: ApiErrorCode.VALIDATION_FAILED,
+        message: 'Distributor approval requires a valid GSTIN with a registered state code',
+      });
+    }
 
     return this.prisma.$transaction(async (tx) => {
       if (dto.decision === OrganisationReviewDecision.APPROVE) {
@@ -240,6 +272,11 @@ export class OrganisationsService {
             },
           },
           reviewReason: dto.reason ?? null,
+          registeredStateCode: verifiedStateCode,
+          gstinVerifiedAt:
+            dto.decision === OrganisationReviewDecision.APPROVE && verifiedStateCode
+              ? new Date()
+              : null,
         },
       });
 
@@ -253,12 +290,16 @@ export class OrganisationsService {
           reviewedAt: existing.reviewedAt?.toISOString() ?? null,
           reviewedByUserId: existing.reviewedByUserId,
           reviewReason: existing.reviewReason,
+          registeredStateCode: existing.registeredStateCode,
+          gstinVerifiedAt: existing.gstinVerifiedAt?.toISOString() ?? null,
         } satisfies Prisma.InputJsonObject,
         newValue: {
           status: organisation.status,
           reviewedAt: organisation.reviewedAt?.toISOString() ?? null,
           reviewedByUserId: organisation.reviewedByUserId,
           reviewReason: organisation.reviewReason,
+          registeredStateCode: organisation.registeredStateCode,
+          gstinVerifiedAt: organisation.gstinVerifiedAt?.toISOString() ?? null,
         } satisfies Prisma.InputJsonObject,
       });
 

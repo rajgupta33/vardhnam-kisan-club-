@@ -1,9 +1,9 @@
 import { forwardRef, Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { ThrottlerModule } from '@nestjs/throttler';
 import type { SignOptions } from 'jsonwebtoken';
 import { AuditModule } from '../audit/audit.module';
+import { NotificationTransportModule } from '../notifications/notification-transport.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtTokenService } from './jwt-token.service';
@@ -25,10 +25,10 @@ import { RolesGuard } from './roles.guard';
         },
       }),
     }),
-    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 5 }]),
+    NotificationTransportModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtTokenService, MockAuthGuard, RefreshTokenGuard, RolesGuard],
-  exports: [JwtTokenService, MockAuthGuard, RefreshTokenGuard, RolesGuard],
+  exports: [AuthService, JwtTokenService, MockAuthGuard, RefreshTokenGuard, RolesGuard],
 })
 export class AuthModule {}

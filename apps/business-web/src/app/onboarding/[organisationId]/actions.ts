@@ -13,7 +13,7 @@ export async function reviewOrganisationAction(formData: FormData): Promise<void
   const organisationId = requireFormValue(formData, 'organisationId');
   const decision = requireFormValue(formData, 'decision') as OrganisationReviewDecision;
   const reason = optionalFormValue(formData, 'reason');
-  const { client, config } = createBusinessApiClient();
+  const { client, config } = await createBusinessApiClient();
 
   if (!client) {
     redirectWithMessage(organisationId, 'error', `Missing ${config.missingVariables.join(', ')}`);
@@ -43,7 +43,7 @@ export async function reviewKycDocumentAction(formData: FormData): Promise<void>
   const status = requireFormValue(formData, 'status') as KycDocumentStatus;
   const reason = optionalFormValue(formData, 'reason');
   const rejectionReason = optionalFormValue(formData, 'rejectionReason');
-  const { client, config } = createBusinessApiClient();
+  const { client, config } = await createBusinessApiClient();
 
   if (!client) {
     redirectWithMessage(organisationId, 'error', `Missing ${config.missingVariables.join(', ')}`);

@@ -1,11 +1,17 @@
 import Link from 'next/link';
 import type {
+  AuditLog,
   CompanyProfile,
   DistributorProfile,
   KycDocument,
   OnboardingOrganisation,
 } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
+import { ConfirmSubmitButton } from '../../../components/confirm-submit-button';
+import { DataTable, type DataTableColumn } from '../../../components/data-table';
+import { EmptyState } from '../../../components/empty-state';
+import { Pagination } from '../../../components/pagination';
+import { StatusBadge } from '../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
 import { loadAuditLogs, loadOnboardingOrganisation } from '../../../lib/marketplace-api';
 import { reviewKycDocumentAction, reviewOrganisationAction } from './actions';
@@ -13,6 +19,7 @@ import { reviewKycDocumentAction, reviewOrganisationAction } from './actions';
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Record<string, string | string[] | undefined>;
+const auditLimit = 10;
 
 interface OnboardingDetailPageProps {
   params: Promise<{ organisationId: string }>;
@@ -25,13 +32,22 @@ export default async function OnboardingDetailPage({
 }: OnboardingDetailPageProps) {
   const { organisationId } = await params;
   const resolvedSearchParams = (await searchParams) ?? {};
+  const auditPage = parsePage(readParam(resolvedSearchParams.auditPage));
   const organisationResult = await loadOnboardingOrganisation(organisationId);
-  const auditResult = await loadAuditLogs({ organisationId, page: 1, limit: 10 });
+  const auditResult = await loadAuditLogs({ organisationId, page: auditPage, limit: auditLimit });
   const notice = readParam(resolvedSearchParams.notice);
   const error = readParam(resolvedSearchParams.error);
+  const auditEntries = auditResult.ok ? auditResult.data.items : [];
+  const auditTotal = auditResult.ok ? auditResult.data.total : 0;
+  const auditColumns: DataTableColumn<AuditLog>[] = [
+    { key: 'time', header: 'Time', render: (entry) => formatDateTime(entry.createdAt) },
+    { key: 'action', header: 'Action', render: (entry) => labelFromCode(entry.action) },
+    { key: 'resource', header: 'Resource', render: (entry) => entry.resourceType },
+    { key: 'reason', header: 'Reason', render: (entry) => entry.reason ?? 'Not recorded' },
+  ];
   const statuses = [
     {
-      label: organisationResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: organisationResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: organisationResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -49,7 +65,7 @@ export default async function OnboardingDetailPage({
       title={organisationResult.ok ? organisationResult.data.displayName : 'Onboarding Record'}
     >
       <div className="breadcrumbRow">
-        <Link className="textLink" href="/">
+        <Link className="textLink" href="/onboarding">
           Back to queue
         </Link>
         <Link className="textLink" href={`/audit?organisationId=${organisationId}`}>
@@ -61,15 +77,16 @@ export default async function OnboardingDetailPage({
       {error ? <p className="noticeBanner danger">{error}</p> : null}
 
       {!organisationResult.ok ? (
-        <section className="emptyState" aria-label="Onboarding detail status">
-          <h3>Onboarding Detail Unavailable</h3>
-          <p className="mutedText">{organisationResult.error}</p>
-        </section>
+        <EmptyState description={organisationResult.error} title="Onboarding Detail Unavailable" />
       ) : (
         <DetailWorkspace organisation={organisationResult.data} />
       )}
 
-      <section className="auditPreview" aria-label="Organisation audit history">
+      <section
+        className="auditPreview"
+        id="organisation-audit-history"
+        aria-label="Organisation audit history"
+      >
         <div className="sectionHeader">
           <div>
             <p className="eyebrow">Audit</p>
@@ -77,30 +94,24 @@ export default async function OnboardingDetailPage({
           </div>
         </div>
         {!auditResult.ok ? (
-          <p className="mutedText">{auditResult.error}</p>
+          <EmptyState description={auditResult.error} title="Organisation history is unavailable" />
         ) : (
-          <div className="tableShell">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Action</th>
-                  <th>Resource</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditResult.data.items.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{formatDateTime(entry.createdAt)}</td>
-                    <td>{labelFromCode(entry.action)}</td>
-                    <td>{entry.resourceType}</td>
-                    <td>{entry.reason ?? 'Not recorded'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <DataTable
+              caption="Organisation audit history"
+              columns={auditColumns}
+              emptyDescription="Organisation review events will appear here."
+              emptyTitle="No organisation history"
+              rowKey={(entry) => entry.id}
+              rows={auditEntries}
+            />
+            <Pagination
+              buildHref={(targetPage) => buildOnboardingDetailHref(organisationId, targetPage)}
+              limit={auditLimit}
+              page={auditPage}
+              total={auditTotal}
+            />
+          </>
         )}
       </section>
     </BusinessShell>
@@ -118,9 +129,10 @@ function DetailWorkspace({ organisation }: { organisation: OnboardingOrganisatio
             <p className="eyebrow">{labelFromCode(organisation.type)}</p>
             <h3>{organisation.legalName}</h3>
           </div>
-          <span className={`statusBadge ${organisation.status === 'ACTIVE' ? 'ok' : 'warn'}`}>
-            {labelFromCode(organisation.status)}
-          </span>
+          <StatusBadge
+            label={labelFromCode(organisation.status)}
+            tone={organisationStatusTone(organisation.status)}
+          />
         </div>
         <dl className="definitionGrid threeColumn">
           <div>
@@ -159,12 +171,14 @@ function DetailWorkspace({ organisation }: { organisation: OnboardingOrganisatio
         </div>
         <div className="requirementList stacked">
           {readiness.missingRequirements.length === 0 ? (
-            <span className="statusBadge ok">Ready for approval</span>
+            <StatusBadge label="Ready for approval" tone="ok" />
           ) : (
             readiness.missingRequirements.map((requirement) => (
-              <span className="statusBadge warn" key={requirement}>
-                Missing {labelFromCode(requirement)}
-              </span>
+              <StatusBadge
+                key={requirement}
+                label={`Missing ${labelFromCode(requirement)}`}
+                tone="warn"
+              />
             ))
           )}
         </div>
@@ -257,7 +271,10 @@ function KycPanel({
         </div>
       </div>
       {documents.length === 0 ? (
-        <p className="mutedText">No KYC metadata has been submitted.</p>
+        <EmptyState
+          description="Submitted KYC document metadata will appear here."
+          title="No KYC metadata submitted"
+        />
       ) : (
         <div className="documentList">
           {documents.map((document) => (
@@ -265,9 +282,10 @@ function KycPanel({
               <div>
                 <div className="rowHeader compact">
                   <h4>{labelFromCode(document.documentType)}</h4>
-                  <span className={`statusBadge ${document.status === 'APPROVED' ? 'ok' : 'warn'}`}>
-                    {labelFromCode(document.status)}
-                  </span>
+                  <StatusBadge
+                    label={labelFromCode(document.status)}
+                    tone={kycStatusTone(document.status)}
+                  />
                 </div>
                 <dl className="definitionGrid threeColumn">
                   <DetailField label="Number" value={document.documentNumber} />
@@ -318,9 +336,13 @@ function KycActionForm({
         type="hidden"
         value={`Marked ${status.toLowerCase()} from business portal`}
       />
-      <button className="queueAction" disabled={document.status === status} type="submit">
+      <ConfirmSubmitButton
+        className="queueAction"
+        confirmMessage={`Mark this KYC document as ${labelFromCode(status).toLowerCase()}?`}
+        disabled={document.status === status}
+      >
         {labelFromCode(status)}
-      </button>
+      </ConfirmSubmitButton>
     </form>
   );
 }
@@ -344,9 +366,13 @@ function KycRejectForm({
         placeholder="Rejection reason"
         required
       />
-      <button className="dangerButton" disabled={document.status === 'REJECTED'} type="submit">
+      <ConfirmSubmitButton
+        className="dangerButton"
+        confirmMessage="Reject this KYC document with the recorded reason?"
+        disabled={document.status === 'REJECTED'}
+      >
         Reject
-      </button>
+      </ConfirmSubmitButton>
     </form>
   );
 }
@@ -375,13 +401,12 @@ function OrganisationReviewPanel({
             type="hidden"
             value="Onboarding profile and KYC metadata verified."
           />
-          <button
-            className="primaryButton"
+          <ConfirmSubmitButton
+            confirmMessage="Approve this organisation for marketplace access?"
             disabled={!ready || organisation.status === 'ACTIVE'}
-            type="submit"
           >
             Approve Organisation
-          </button>
+          </ConfirmSubmitButton>
         </form>
         <form action={reviewOrganisationAction} className="decisionForm">
           <input name="organisationId" type="hidden" value={organisation.id} />
@@ -394,13 +419,13 @@ function OrganisationReviewPanel({
             placeholder="Rejection reason"
             required
           />
-          <button
+          <ConfirmSubmitButton
             className="dangerButton"
+            confirmMessage="Reject this organisation with the recorded reason?"
             disabled={organisation.status === 'REJECTED'}
-            type="submit"
           >
             Reject Organisation
-          </button>
+          </ConfirmSubmitButton>
         </form>
       </div>
     </section>
@@ -440,6 +465,32 @@ function getReadiness(organisation: OnboardingOrganisation): {
     ready: missingRequirements.length === 0,
     missingRequirements,
   };
+}
+
+function buildOnboardingDetailHref(organisationId: string, auditPage: number): string {
+  const params = new URLSearchParams();
+  if (auditPage > 1) params.set('auditPage', String(auditPage));
+  const query = params.toString();
+  return `/onboarding/${organisationId}${query ? `?${query}` : ''}#organisation-audit-history`;
+}
+
+function organisationStatusTone(
+  status: OnboardingOrganisation['status'],
+): 'ok' | 'warn' | 'danger' {
+  if (status === 'ACTIVE') return 'ok';
+  if (status === 'REJECTED' || status === 'SUSPENDED') return 'danger';
+  return 'warn';
+}
+
+function kycStatusTone(status: KycDocument['status']): 'ok' | 'warn' | 'danger' {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED' || status === 'EXPIRED') return 'danger';
+  return 'warn';
+}
+
+function parsePage(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '1', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function readParam(value: string | string[] | undefined): string | undefined {

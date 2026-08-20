@@ -1,8 +1,12 @@
 import Link from 'next/link';
 import type { ProductOrder, ProductOrderStatus } from '@vardhnam/api-client';
 import { BusinessShell } from '../../components/business-shell';
-import { formatDateTime, labelFromCode } from '../../lib/format';
+import { EmptyState } from '../../components/empty-state';
+import { Pagination } from '../../components/pagination';
+import { StatusBadge } from '../../components/status-badge';
+import { formatDateTime, formatPaise, labelFromCode } from '../../lib/format';
 import { loadFulfilmentOrders } from '../../lib/marketplace-api';
+import { parseOrderPage, summarizeOrderQueue } from '../../lib/order-queue-metrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,33 +26,25 @@ const fulfilmentStatusValues: ProductOrderStatus[] = [
   'OUT_FOR_DELIVERY',
   'DELIVERED',
 ];
+const limit = 25;
 
 export default async function OrdersPage({ searchParams }: OrdersPageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const status = parseOrderStatus(readParam(resolvedSearchParams.status)) ?? 'CONFIRMED';
   const q = readParam(resolvedSearchParams.q);
+  const page = parseOrderPage(readParam(resolvedSearchParams.page));
   const orderResult = await loadFulfilmentOrders({
     status,
     ...(q ? { q } : {}),
-    page: 1,
-    limit: 25,
+    page,
+    limit,
   });
   const orders = orderResult.ok ? orderResult.data.items : [];
-  const totalItems = orders.reduce((total, order) => total + order.itemCount, 0);
-  const totalValuePaise = orders.reduce((total, order) => total + order.subtotalPaise, 0);
-  const actionReadyOrders = orders.filter((order) =>
-    [
-      'CONFIRMED',
-      'DISTRIBUTOR_ACCEPTED',
-      'READY_TO_PACK',
-      'PACKED',
-      'READY_FOR_PICKUP',
-      'OUT_FOR_DELIVERY',
-    ].includes(order.status),
-  ).length;
+  const total = orderResult.ok ? orderResult.data.total : 0;
+  const queueMetrics = summarizeOrderQueue(orders);
   const statuses = [
     {
-      label: orderResult.config.configured ? 'Mock auth configured' : 'Mock auth missing',
+      label: orderResult.config.configured ? 'Authenticated session' : 'Session missing',
       tone: orderResult.config.configured ? ('ok' as const) : ('danger' as const),
     },
     {
@@ -67,16 +63,18 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
     >
       <section className="metricStrip" aria-label="Fulfilment order metrics">
         <article className="metricCard">
-          <p className="metricValue">{orders.length}</p>
-          <p className="metricLabel">Orders in view</p>
+          <p className="metricValue">{orderResult.ok ? total : 'Unavailable'}</p>
+          <p className="metricLabel">Matching orders</p>
         </article>
         <article className="metricCard">
-          <p className="metricValue">{actionReadyOrders}</p>
-          <p className="metricLabel">Awaiting seller action</p>
+          <p className="metricValue">
+            {orderResult.ok ? queueMetrics.sellerActionCount : 'Unavailable'}
+          </p>
+          <p className="metricLabel">Seller actions in view</p>
         </article>
         <article className="metricCard">
-          <p className="metricValue">{formatPaise(totalValuePaise)}</p>
-          <p className="metricLabel">{totalItems} order items</p>
+          <p className="metricValue">{orderResult.ok ? queueMetrics.itemCount : 'Unavailable'}</p>
+          <p className="metricLabel">Order items in view</p>
         </article>
       </section>
 
@@ -85,7 +83,7 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
           {fulfilmentStatusValues.map((statusValue) => (
             <FilterLink
               active={status === statusValue}
-              href={buildOrdersHref(statusValue, q)}
+              href={buildOrdersHref(statusValue, q, 1)}
               key={statusValue}
               label={labelFromCode(statusValue)}
             />
@@ -106,10 +104,7 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
       </section>
 
       {!orderResult.ok ? (
-        <section className="emptyState">
-          <h3>Fulfilment API Connection Blocked</h3>
-          <p className="mutedText">{orderResult.error}</p>
-        </section>
+        <EmptyState description={orderResult.error} title="Fulfilment API Connection Blocked" />
       ) : (
         <section className="queueList" aria-label="Distributor fulfilment order queue">
           <div className="sectionHeader">
@@ -119,15 +114,19 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
             </div>
           </div>
           {orders.length === 0 ? (
-            <article className="emptyState">
-              <h3>No product orders</h3>
-              <p className="mutedText">
-                Confirmed child orders will appear here after mock payment.
-              </p>
-            </article>
+            <EmptyState
+              description="Seller child orders matching this filter will appear here."
+              title="No product orders"
+            />
           ) : (
             orders.map((order) => <OrderQueueCard key={order.id} order={order} />)
           )}
+          <Pagination
+            buildHref={(targetPage) => buildOrdersHref(status, q, targetPage)}
+            limit={limit}
+            page={page}
+            total={total}
+          />
         </section>
       )}
     </BusinessShell>
@@ -143,9 +142,7 @@ function OrderQueueCard({ order }: { order: ProductOrder }) {
             <p className="eyebrow">{order.sellerNameSnapshot}</p>
             <h3>{order.orderNumber}</h3>
           </div>
-          <span className={`statusBadge ${statusTone(order.status)}`}>
-            {labelFromCode(order.status)}
-          </span>
+          <StatusBadge label={labelFromCode(order.status)} tone={statusTone(order.status)} />
         </div>
         <dl className="definitionGrid threeColumn">
           <DetailField label="Pincode" value={order.serviceablePincode} />
@@ -197,11 +194,12 @@ function latestStatusReason(order: ProductOrder): string {
   return latest?.reason ?? 'Not recorded';
 }
 
-function buildOrdersHref(status: ProductOrderStatus, q: string | undefined): string {
+function buildOrdersHref(status: ProductOrderStatus, q: string | undefined, page: number): string {
   const params = new URLSearchParams({ status });
   if (q) {
     params.set('q', q);
   }
+  if (page > 1) params.set('page', String(page));
 
   return `/orders?${params.toString()}`;
 }
@@ -214,14 +212,6 @@ function statusTone(status: ProductOrderStatus): 'ok' | 'warn' | 'danger' {
     return 'warn';
   }
   return 'ok';
-}
-
-function formatPaise(value: number): string {
-  const rupees = Math.trunc(value / 100);
-  const paise = value % 100;
-  return paise === 0
-    ? `Rs ${rupees.toLocaleString('en-IN')}`
-    : `Rs ${rupees.toLocaleString('en-IN')}.${paise.toString().padStart(2, '0')}`;
 }
 
 function readParam(value: string | string[] | undefined): string | undefined {
