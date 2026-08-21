@@ -11,6 +11,8 @@ import {
   OrganisationStatus,
   OrganisationType,
   PlatformRole,
+  ProductCheckoutStatus,
+  ProductOrderStatus,
   PromoterAttributionStatus,
   SupportTicketCategory,
   SupportTicketStatus,
@@ -107,6 +109,7 @@ describe('Dashboards', () => {
     expect(findItem(items, 'support_tickets_open_any')?.count).toBeGreaterThanOrEqual(1);
     expect(findItem(items, 'tally_sync_pending')?.count).toBeGreaterThanOrEqual(1);
     expect(findItem(items, 'notifications_failed')?.count).toBeGreaterThanOrEqual(1);
+    expect(findItem(items, 'fulfilment_orders_pending_any')?.count).toBeGreaterThanOrEqual(1);
 
     expect(findItem(items, 'my_promoter_attributions_active')).toBeUndefined();
     expect(findItem(items, 'my_payout_account_action_needed')).toBeUndefined();
@@ -121,6 +124,7 @@ describe('Dashboards', () => {
       .expect(200);
     const itemsA = responseA.body.data.items as DashboardItem[];
     expect(findItem(itemsA, 'offers_pending_review_own')?.count).toBe(1);
+    expect(findItem(itemsA, 'fulfilment_orders_pending_own')?.count).toBe(1);
     expect(findItem(itemsA, 'offers_pending_review')).toBeUndefined();
 
     const responseB = await request(server)
@@ -129,6 +133,7 @@ describe('Dashboards', () => {
       .expect(200);
     const itemsB = responseB.body.data.items as DashboardItem[];
     expect(findItem(itemsB, 'offers_pending_review_own')?.count).toBe(0);
+    expect(findItem(itemsB, 'fulfilment_orders_pending_own')?.count).toBe(0);
   });
 
   it('scopes self-owned items to the requesting promoter only', async () => {
@@ -361,6 +366,35 @@ async function seedDashboardData(): Promise<{
       fullName: 'Dashboards Farmer',
       preferredLocale: 'hi-IN',
       primaryPincode: '302001',
+    },
+  });
+  const checkout = await prisma.productCheckout.create({
+    data: {
+      farmerProfileId: farmerProfile.id,
+      serviceablePincode: '302001',
+      status: ProductCheckoutStatus.PAID,
+      subtotalPaise: 118_000,
+      farmerPayablePaise: 118_000,
+      itemCount: 1,
+      childOrderCount: 1,
+    },
+  });
+  await prisma.productOrder.create({
+    data: {
+      checkoutId: checkout.id,
+      farmerProfileId: farmerProfile.id,
+      sellerOrganisationId: distributorAOrganisation.id,
+      orderNumber: `PO-DASH-${short}`,
+      status: ProductOrderStatus.CONFIRMED,
+      serviceablePincode: '302001',
+      sellerNameSnapshot: distributorAOrganisation.displayName,
+      deliveryAddressSnapshot: {
+        recipientName: 'Dashboards Farmer',
+        pincode: '302001',
+      },
+      subtotalPaise: 118_000,
+      farmerPayablePaise: 118_000,
+      itemCount: 1,
     },
   });
   await prisma.promoterAttribution.create({

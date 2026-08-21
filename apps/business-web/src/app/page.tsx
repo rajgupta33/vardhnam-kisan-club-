@@ -170,6 +170,7 @@ function dashboardItemHref(code: string): string | undefined {
     case 'payout_accounts_pending_verification':
       return '/payouts/accounts?status=PENDING_VERIFICATION';
     case 'fulfilment_orders_pending_own':
+    case 'fulfilment_orders_pending_any':
       return '/orders';
     case 'my_payout_account_action_needed':
       return '/payouts/statements';

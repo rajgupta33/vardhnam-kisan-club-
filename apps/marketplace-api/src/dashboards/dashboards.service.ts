@@ -177,6 +177,25 @@ export class DashboardsService {
           }),
       },
       {
+        code: 'fulfilment_orders_pending_any',
+        label: 'Orders awaiting fulfilment action (platform-wide)',
+        scope: 'PLATFORM',
+        permission: PermissionCode.FULFILMENT_ORDERS_READ_ANY,
+        count: () =>
+          this.prisma.productOrder.count({
+            where: {
+              status: {
+                in: [
+                  ProductOrderStatus.CONFIRMED,
+                  ProductOrderStatus.DISTRIBUTOR_ACCEPTED,
+                  ProductOrderStatus.READY_TO_PACK,
+                  ProductOrderStatus.PACKED,
+                ],
+              },
+            },
+          }),
+      },
+      {
         code: 'catalogue_pending_review_own',
         label: 'Own catalogue records pending review',
         scope: 'ORGANISATION',

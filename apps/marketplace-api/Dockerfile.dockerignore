@@ -44,6 +44,9 @@ apps/partner-mobile
 **/*.docx
 **/*.pdf
 **/*.png
+!apps/marketplace-api/prisma/seed-assets/
+!apps/marketplace-api/prisma/seed-assets/products/
+!apps/marketplace-api/prisma/seed-assets/products/*.png
 
 .vscode
 .idea

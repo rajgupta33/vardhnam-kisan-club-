@@ -50,6 +50,7 @@ import {
   PlatformRole,
   Prisma,
   PrismaClient,
+  PromoterAttributionStatus,
   WarehouseStatus,
 } from '@prisma/client';
 import { hashPassword } from '../src/auth/crypto.util';
@@ -100,6 +101,7 @@ const id = {
   clubPromoterProfile: '00000000-0000-4000-8000-000000000202',
   clubMembership: '00000000-0000-4000-8000-000000000203',
   clubAssignment: '00000000-0000-4000-8000-000000000204',
+  clubPromoterAttribution: '00000000-0000-4000-8000-000000000210',
   clubProgramme: '00000000-0000-4000-8000-000000000205',
   clubBenefitRule: '00000000-0000-4000-8000-000000000206',
   // A Club programme may only cover a Vardhnam-owned product, so the real
@@ -781,6 +783,39 @@ async function seedKisanClub(): Promise<void> {
     update: { status: KisanClubMembershipStatus.ACTIVE, advisoryConsent: true },
   });
 
+  // Club assignment and standard sales attribution are one relationship, not
+  // parallel commission systems. The application service creates both in one
+  // transaction; the deterministic demo seed must preserve the same invariant.
+  await prisma.promoterAttribution.updateMany({
+    where: {
+      farmerProfileId: id.farmerProfile,
+      status: PromoterAttributionStatus.ACTIVE,
+      id: { not: id.clubPromoterAttribution },
+    },
+    data: { status: PromoterAttributionStatus.REVOKED, revokedAt: now },
+  });
+  const promoterAttribution = await prisma.promoterAttribution.upsert({
+    where: { id: id.clubPromoterAttribution },
+    create: {
+      id: id.clubPromoterAttribution,
+      promoterUserId: id.promoterUser,
+      promoterOrganisationId: id.adminOrganisation,
+      farmerProfileId: id.farmerProfile,
+      status: PromoterAttributionStatus.ACTIVE,
+      createdByUserId: id.operationsUser,
+      createdByRole: PlatformRole.OPERATIONS_MANAGER,
+      reason: 'Demo Kisan Club promoter assignment',
+    },
+    update: {
+      promoterUserId: id.promoterUser,
+      promoterOrganisationId: id.adminOrganisation,
+      farmerProfileId: id.farmerProfile,
+      status: PromoterAttributionStatus.ACTIVE,
+      revokedAt: null,
+      reason: 'Demo Kisan Club promoter assignment',
+    },
+  });
+
   // An assignment has no unique business key, so re-running would stack a second
   // active one. Only the absence of an active assignment creates a new record;
   // the app reads "my promoter" from whichever is active.
@@ -791,6 +826,7 @@ async function seedKisanClub(): Promise<void> {
   if (!existingAssignment) {
     await prisma.kisanClubPromoterAssignment.create({
       data: {
+        id: id.clubAssignment,
         membershipId: membership.id,
         promoterUserId: promoterProfile.promoterUserId,
         territoryId: id.clubTerritory,
@@ -799,7 +835,13 @@ async function seedKisanClub(): Promise<void> {
         assignedByUserId: id.operationsUser,
         assignedByRole: PlatformRole.OPERATIONS_MANAGER,
         reason: 'Demo data',
+        promoterAttributionId: promoterAttribution.id,
       },
+    });
+  } else if (existingAssignment.promoterAttributionId !== promoterAttribution.id) {
+    await prisma.kisanClubPromoterAssignment.update({
+      where: { id: existingAssignment.id },
+      data: { promoterAttributionId: promoterAttribution.id },
     });
   }
 

@@ -90,6 +90,23 @@ COPY --from=build /app/apps/marketplace-api/dist apps/marketplace-api/dist
 # this image are always the same version of both.
 COPY --from=build /app/apps/marketplace-api/prisma apps/marketplace-api/prisma
 
+# Internal-test demo product rows reference these deterministic local object
+# keys. Package the approved pack shots with the image so Railway does not lose
+# them on every ephemeral-container deployment. This is not a replacement for
+# durable object storage before a real pilot.
+RUN set -eux; \
+  storage_dir=apps/marketplace-api/.storage/product_image/seed; \
+  assets_dir=apps/marketplace-api/prisma/seed-assets/products; \
+  mkdir -p $storage_dir; \
+  cp $assets_dir/adiyogi.png $storage_dir/adiyogi-research-paddy-seed.png; \
+  cp $assets_dir/aman-plus.png $storage_dir/aman-plus-research-paddy-seed.png; \
+  cp $assets_dir/gauri.png $storage_dir/gauri-research-paddy-seed.png; \
+  cp $assets_dir/basant-gold-9180.png $storage_dir/basant-gold-9180-hybrid-maize-seed.png; \
+  cp $assets_dir/chanakya-4590.png $storage_dir/chanakya-4590-hybrid-maize-seed.png; \
+  cp $assets_dir/vm-lakshmi-1246.png $storage_dir/vm-lakshmi-1246-hybrid-mustard-seed.png; \
+  for image in $storage_dir/*.png; do printf 'image/png' > $image.meta; done; \
+  chown -R node:node apps/marketplace-api/.storage
+
 # The base image ships an unprivileged `node` user; nothing here needs root.
 USER node
 

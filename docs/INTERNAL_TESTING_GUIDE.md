@@ -364,12 +364,13 @@ Do not include JWTs, OTPs, database URLs, Redis URLs, cookies, full request head
 These are known test-environment gaps, not approval for production use:
 
 1. **No background worker service is deployed.** Queue-backed notification delivery, scheduled advisories, some PDF/refund recovery work, and similar jobs may remain pending. Test synchronous API/UI state separately and label blocked worker-dependent cases.
-2. **Seeded product images may return 404.** The demo seed originally wrote images to local `.storage`, which is not persistent/shared object storage in the Railway API container. Product data and ordering can still be tested; log only image-specific regressions beyond this known gap.
-3. **SMS is mocked.** OTPs are displayed in the app for internal testing. This configuration is forbidden for a real pilot or production release.
-4. **Payments and external integrations may be mock/placeholder implementations.** Never use real cards, bank accounts, GST/Tally data, SMS, email, or WhatsApp recipients.
-5. **Crop Doctor is intentionally a shell.** Photo actions and diagnosis are not implemented; human support is the valid action.
-6. **Commercial configuration values may still be placeholders.** Do not treat test commission/tax/return-window values as approved business policy.
-7. **Only seeded roles can be exercised immediately.** Service-provider and sales-partner scenarios may need separately approved demo users/data.
+2. **Seeded product images are bundled only for internal testing.** They survive Railway container redeployment, but new uploads still require durable object storage before a real pilot.
+3. **Direct marketplace orders are not promoter-visible.** A promoter sees only Club coordination assigned to that promoter or an explicitly assisted/attributed workflow. Unrelated farmer order history remains private.
+4. **SMS is mocked.** OTPs are displayed in the app for internal testing. This configuration is forbidden for a real pilot or production release.
+5. **Payments and external integrations may be mock/placeholder implementations.** Never use real cards, bank accounts, GST/Tally data, SMS, email, or WhatsApp recipients.
+6. **Crop Doctor is intentionally a shell.** Photo actions and diagnosis are not implemented; human support is the valid action.
+7. **Commercial configuration values may still be placeholders.** Do not treat test commission/tax/return-window values as approved business policy.
+8. **Only seeded roles can be exercised immediately.** Service-provider and sales-partner scenarios may need separately approved demo users/data.
 
 ## 11. Daily completion checklist
 
