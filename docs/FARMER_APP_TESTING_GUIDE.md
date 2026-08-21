@@ -1,5 +1,7 @@
 # Testing the Farmer App and Kisan Club
 
+> Testing the deployed Railway environment or coordinating all three platforms? Use the [complete internal testing guide](./INTERNAL_TESTING_GUIDE.md). This document remains the local-development farmer-app guide.
+
 **Date:** 2026-08-18
 **Purpose:** get the farmer app running against a seeded backend, with the Kisan Club module populated, in about ten minutes.
 
