@@ -37,7 +37,10 @@ async function bootstrap(): Promise<void> {
   // `app.enableShutdownHooks()` -- see `installShutdownHandlers`.
   installShutdownHandlers(app, logger, 'Bootstrap');
 
-  await app.listen(env.PORT);
+  // Railway and other container platforms route traffic to the container's
+  // network interface. Binding explicitly avoids an accidental localhost-only
+  // listener while still honouring the platform-provided PORT.
+  await app.listen(env.PORT, '0.0.0.0');
   logger.log(`Marketplace API listening on port ${env.PORT}`, 'Bootstrap');
 }
 

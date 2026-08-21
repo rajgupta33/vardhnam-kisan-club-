@@ -1,0 +1,45 @@
+# This file intentionally overrides the API-focused root .dockerignore when
+# apps/business-web/Dockerfile is selected. The build context remains the
+# repository root because npm workspaces and the root lockfile are required.
+
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+.dart_tool
+**/.dart_tool
+
+.storage
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+docs
+artifacts
+infrastructure
+scripts
+apps/marketplace-api
+apps/farmer-mobile
+apps/partner-mobile
+packages/validation
+/product sku/
+
+**/test
+**/*.spec.ts
+**/*.md
+**/*.docx
+**/*.pdf
+
+.vscode
+.idea

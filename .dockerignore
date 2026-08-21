@@ -35,14 +35,23 @@ docs
 artifacts
 infrastructure
 scripts
-apps/business-web
+
+# The API image does not need the Business Portal source, but Railway's npm
+# workspace build plan needs its manifest to resolve the root lockfile. Keep
+# only that manifest in the repository-root Docker context.
+apps/business-web/**
+!apps/business-web/
+!apps/business-web/package.json
+
+# These are Flutter projects, not npm workspaces. No files from them are needed
+# by the API or Business Portal container builds.
 apps/farmer-mobile
 apps/partner-mobile
 **/*.md
 **/*.docx
 **/*.pdf
 **/*.png
-"product sku"
+/product sku/
 
 # Test and tooling config that the runtime image has no use for.
 **/test

@@ -6,8 +6,13 @@
   worker image. Both processes ship from the **same** image and differ only in
   entrypoint, so they can never drift apart in dependencies while sharing a
   database and job payload format.
+- `apps/business-web/Dockerfile` — a multi-stage standalone Next.js image for
+  the Business Portal.
 - `/.dockerignore` — keeps `node_modules`, build output, secrets and the mobile
-  and web workspaces out of the build context.
+  workspaces out of the API build context. It retains only the Business Portal
+  manifest needed to resolve the root npm workspace lockfile.
+- `apps/business-web/Dockerfile.dockerignore` — keeps the Business Portal build
+  context limited to its source and the shared packages it imports.
 - `docker-compose.yml` — PostgreSQL and Redis by default, with the containerised
   API and worker behind an opt-in profile.
 
@@ -25,7 +30,29 @@ the install reproducible lives there:
 
 ```bash
 docker build -f apps/marketplace-api/Dockerfile -t vardhnam-api .
+docker build -f apps/business-web/Dockerfile -t vardhnam-business-web .
 ```
+
+## Railway service settings
+
+Keep the build context at the repository root for every Node.js service. Do not
+set a service root to an individual workspace, because both images require the
+root `package-lock.json` and npm workspace metadata.
+
+| Railway service | Root directory | Dockerfile path | Start command |
+| --------------- | -------------- | --------------- | ------------- |
+| Marketplace API | blank or `/` | `apps/marketplace-api/Dockerfile` | image default |
+| Queue worker | blank or `/` | `apps/marketplace-api/Dockerfile` | `node dist/src/worker.js` |
+| Business Portal | blank or `/` | `apps/business-web/Dockerfile` | image default |
+
+Use the final `runtime` stage for the API and portal services. Run database
+migrations separately with the API image's `migrator` target; do not run them in
+the API or worker startup commands.
+
+Railway injects `PORT`. Both HTTP processes listen on `0.0.0.0`, so they accept
+traffic through Railway's proxy. Configure `DATABASE_URL` and `REDIS_URL` with
+Railway private-network URLs, and use `/api/v1/health` and
+`/api/v1/health/ready` for API liveness and readiness checks.
 
 ## Local usage
 
