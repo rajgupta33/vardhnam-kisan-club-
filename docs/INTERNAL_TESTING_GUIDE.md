@@ -14,8 +14,8 @@ This document is the shared runbook for testing the complete Vardhnam marketplac
 | --- | --- | --- |
 | Business portal | <https://business-web-production-5714.up.railway.app> | Login page opens |
 | Marketplace API | <https://marketplace-api-production-70ac.up.railway.app> | Online |
-| API liveness | <https://marketplace-api-production-70ac.up.railway.app/api/v1/health/liveness> | HTTP 200 |
-| API readiness | <https://marketplace-api-production-70ac.up.railway.app/api/v1/health/readiness> | HTTP 200; database and Redis ready |
+| API liveness | <https://marketplace-api-production-70ac.up.railway.app/api/v1/health> | HTTP 200 |
+| API readiness | <https://marketplace-api-production-70ac.up.railway.app/api/v1/health/ready> | HTTP 200; database, Redis, and queues ready |
 | PostgreSQL | Railway private service | Online |
 | Redis | Railway private service | Online |
 
