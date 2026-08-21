@@ -1,0 +1,49 @@
+# API-specific context rules. Docker automatically uses this file when
+# apps/marketplace-api/Dockerfile is selected from the repository root.
+
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+.dart_tool
+**/.dart_tool
+
+.storage
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+docs
+artifacts
+infrastructure
+scripts
+
+# npm needs the workspace manifest while the API image does not need the
+# Business Portal implementation.
+apps/business-web/**
+!apps/business-web/
+!apps/business-web/package.json
+apps/farmer-mobile
+apps/partner-mobile
+/product sku/
+
+**/test
+**/*.spec.ts
+**/*.md
+**/*.docx
+**/*.pdf
+**/*.png
+
+.vscode
+.idea

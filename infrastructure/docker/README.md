@@ -8,9 +8,12 @@
   database and job payload format.
 - `apps/business-web/Dockerfile` — a multi-stage standalone Next.js image for
   the Business Portal.
-- `/.dockerignore` — keeps `node_modules`, build output, secrets and the mobile
-  workspaces out of the API build context. It retains only the Business Portal
-  manifest needed to resolve the root npm workspace lockfile.
+- `/.dockerignore` — keeps dependencies, build output, secrets and mobile
+  workspaces out of the repository-root context while retaining the Business
+  Portal source required by Railway's generated npm workspace builder.
+- `apps/marketplace-api/Dockerfile.dockerignore` — excludes the Business Portal
+  implementation when the API Dockerfile is selected, while retaining its npm
+  workspace manifest for lockfile resolution.
 - `apps/business-web/Dockerfile.dockerignore` — keeps the Business Portal build
   context limited to its source and the shared packages it imports.
 - `docker-compose.yml` — PostgreSQL and Redis by default, with the containerised
@@ -38,6 +41,10 @@ docker build -f apps/business-web/Dockerfile -t vardhnam-business-web .
 Keep the build context at the repository root for every Node.js service. Do not
 set a service root to an individual workspace, because both images require the
 root `package-lock.json` and npm workspace metadata.
+
+The root context also supports Railway's generated npm build plan. This is a
+fallback for service auto-detection; explicitly selecting the Dockerfiles below
+remains the reproducible deployment configuration.
 
 | Railway service | Root directory | Dockerfile path | Start command |
 | --------------- | -------------- | --------------- | ------------- |

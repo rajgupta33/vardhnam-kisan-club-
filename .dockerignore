@@ -36,12 +36,10 @@ artifacts
 infrastructure
 scripts
 
-# The API image does not need the Business Portal source, but Railway's npm
-# workspace build plan needs its manifest to resolve the root lockfile. Keep
-# only that manifest in the repository-root Docker context.
-apps/business-web/**
-!apps/business-web/
-!apps/business-web/package.json
+# Keep the Business Portal source in the repository-root context. Railway may
+# use its generated npm workspace builder before a service-specific Dockerfile
+# is selected, and Next.js must be able to see apps/business-web/src/app.
+# The API Dockerfile has its own adjacent ignore file to exclude this source.
 
 # These are Flutter projects, not npm workspaces. No files from them are needed
 # by the API or Business Portal container builds.
