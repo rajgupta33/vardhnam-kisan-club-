@@ -45,9 +45,10 @@ COPY tsconfig.base.json ./
 
 COPY apps/marketplace-api/ apps/marketplace-api/
 
-# Generate before compiling: the build imports types from the generated client.
-RUN npm --workspace @vardhnam/marketplace-api run prisma:generate \
-  && npm --workspace @vardhnam/marketplace-api run build
+# The API build lifecycle generates Prisma first (`prebuild`) because the
+# TypeScript compilation imports the generated models and enums. Keeping that
+# prerequisite in package.json also makes Railway's generated builder reliable.
+RUN npm --workspace @vardhnam/marketplace-api run build
 
 # ---------------------------------------------------------------------------
 # migrator -- keeps the Prisma CLI, which the runtime image deliberately drops

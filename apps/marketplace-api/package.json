@@ -4,6 +4,7 @@
   "private": true,
   "description": "NestJS API for the Vardhnam Agrotech marketplace.",
   "scripts": {
+    "prebuild": "npm run prisma:generate",
     "build": "nest build",
     "start": "node dist/src/main.js",
     "start:dev": "nest start --watch",

@@ -24,7 +24,7 @@
 | Stage      | Purpose                                                                                                             |
 | ---------- | ------------------------------------------------------------------------------------------------------------------- |
 | `deps`     | `npm ci` for the API workspace only, including dev dependencies needed to compile.                                  |
-| `build`    | `prisma generate`, then `nest build`.                                                                               |
+| `build`    | Runs the API workspace build; its `prebuild` lifecycle generates Prisma before `nest build`.                       |
 | `migrator` | Keeps the Prisma CLI so `migrate deploy` can run as a deployment step. **Not** the serving image.                   |
 | `runtime`  | Production dependencies plus compiled output, the generated Prisma client, and the schema. Runs as the `node` user. |
 
