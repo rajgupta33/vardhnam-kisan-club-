@@ -332,6 +332,49 @@ Use this scenario after each platform passes its individual smoke test.
 
 Pass only if the same order identity and consistent status are visible across all three platforms, permissions remain role-correct, and financial/seller data follows the business rules.
 
+### 8.1 Kisan Club promoter fulfilment scenario
+
+The scenario above uses an ordinary marketplace product, which by design never
+reaches a promoter. Run this second scenario to exercise the promoter's order
+surface. **A Club order is the only thing that puts an order on the promoter's
+fulfilment screen**, so a session that only places ordinary orders proves
+nothing about the promoter app.
+
+An order becomes a Club order only when the item is covered by an active Kisan
+Club programme. In the seeded environment that is the Vardhnam **Adiyogi**
+paddy seed, 5 kg pack, at pincode `302001`. If the checkout does not show the
+Rs 25 club benefit as a separate line, the order is not a Club order and the
+rest of this scenario will not produce anything.
+
+| Step | Platform/role | Action | Evidence to record |
+| --- | --- | --- | --- |
+| 1 | Farmer app | Open Kisan Club and confirm membership `KC-DEMO-0001` is active | Membership screenshot |
+| 2 | Farmer app | Open the Club catalogue and add the Adiyogi 5 kg pack to the cart | Cart screenshot |
+| 3 | Farmer app | Confirm the checkout shows the Rs 25 club benefit as a separate line | Checkout screenshot |
+| 4 | Farmer app | Place the order and complete the mock payment | Order number |
+| 5 | Partner app / Promoter | Refresh the fulfilment screen and confirm the new assignment appears | Assignment screenshot |
+| 6 | Partner app / Promoter | Accept the assignment, then move it through product ready and farmer contacted | Status screenshots |
+| 7 | Business portal / Operations | Confirm the same order and its promoter assignment are visible | Order screenshot |
+| 8 | Partner app / Promoter | Complete the assignment and confirm the farmer app reflects the outcome | Status screenshots |
+
+The assignment is created at the moment the payment succeeds, not when the
+order row is created. An order that was already confirmed before a promoter
+became eligible is **not** assigned retroactively; place a new Club order to
+retest.
+
+If step 5 shows nothing, the promoter is failing an eligibility rule rather
+than hitting a UI bug. All of the following must hold, and the API logs a
+warning naming the reason when they do not:
+
+- The farmer's Club membership is `ACTIVE` and has an `ACTIVE` promoter assignment.
+- The promoter user is `ACTIVE` and their Club profile has `clubEnabled` set.
+- The promoter's organisation is `ACTIVE` **and** holds an approved, unexpired KYC document.
+- The promoter holds an `ACTIVE` membership with role `PROMOTER` or `SALES_PARTNER` **in that same organisation** — not in the farmer login context organisation.
+
+The last two are the ones that have actually failed in this environment. The
+same rules gate automatic promoter matching, so a promoter who fails them also
+shows an unassigned territory on the partner app.
+
 ## 9. Defect reporting
 
 Create one defect per problem. Do not combine unrelated failures.
@@ -365,7 +408,7 @@ These are known test-environment gaps, not approval for production use:
 
 1. **No background worker service is deployed.** Queue-backed notification delivery, scheduled advisories, some PDF/refund recovery work, and similar jobs may remain pending. Test synchronous API/UI state separately and label blocked worker-dependent cases.
 2. **Seeded product images are bundled only for internal testing.** They survive Railway container redeployment, but new uploads still require durable object storage before a real pilot.
-3. **Direct marketplace orders are not promoter-visible.** A promoter sees only Club coordination assigned to that promoter or an explicitly assisted/attributed workflow. Unrelated farmer order history remains private.
+3. **Direct marketplace orders are not promoter-visible.** A promoter sees only Club coordination assigned to that promoter or an explicitly assisted/attributed workflow. Unrelated farmer order history remains private. This is the expected behaviour, not a defect: to see anything on the promoter fulfilment screen, place a Kisan Club order as described in section 8.1.
 4. **SMS is mocked.** OTPs are displayed in the app for internal testing. This configuration is forbidden for a real pilot or production release.
 5. **Payments and external integrations may be mock/placeholder implementations.** Never use real cards, bank accounts, GST/Tally data, SMS, email, or WhatsApp recipients.
 6. **Crop Doctor is intentionally a shell.** Photo actions and diagnosis are not implemented; human support is the valid action.

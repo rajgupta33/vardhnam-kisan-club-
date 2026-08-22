@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -11,9 +12,7 @@ import {
   KisanClubFulfilmentMode,
   KisanClubFulfilmentStatus,
   KisanClubMembershipStatus,
-  KycDocumentStatus,
   MembershipStatus,
-  OrganisationStatus,
   PlatformRole,
   Prisma,
   UserStatus,
@@ -25,6 +24,7 @@ import type { CurrentUser } from '../../auth/current-user.interface';
 import { paginationOffset } from '../../common/dto/pagination-query.dto';
 import { ApiErrorCode } from '../../common/errors/api-error-codes';
 import { PrismaService } from '../../prisma/prisma.service';
+import { verifiedPromoterOrganisationFilter } from '../promoter-eligibility';
 import type { KisanClubFulfilmentActionDto } from '../dto/kisan-club-fulfilment-action.dto';
 import type { ListKisanClubFulfilmentQueryDto } from '../dto/list-kisan-club-fulfilment-query.dto';
 import type { ReassignKisanClubFulfilmentDto } from '../dto/reassign-kisan-club-fulfilment.dto';
@@ -111,6 +111,8 @@ type AssignmentDetail = Prisma.KisanClubFulfilmentAssignmentGetPayload<{
 
 @Injectable()
 export class KisanClubFulfilmentService {
+  private readonly logger = new Logger(KisanClubFulfilmentService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -125,6 +127,10 @@ export class KisanClubFulfilmentService {
     requestId?: string,
   ): Promise<void> {
     if (!this.configService.get<boolean>('KISAN_CLUB_ENABLED')) return;
+    // Every branch below that declines to create an assignment says so. A Club
+    // order that reaches no promoter is otherwise invisible: the promoter sees
+    // an empty screen, no assignment row exists to inspect, and nothing
+    // distinguishes "no promoter is eligible" from "the code never ran".
     for (const order of orders) {
       if (!order.isKisanClubOrder) continue;
       const existing = await tx.kisanClubFulfilmentAssignment.findUnique({
@@ -143,15 +149,7 @@ export class KisanClubFulfilmentService {
             status: UserStatus.ACTIVE,
             kisanClubPromoterProfile: {
               clubEnabled: true,
-              promoterOrganisation: {
-                status: OrganisationStatus.ACTIVE,
-                kycDocuments: {
-                  some: {
-                    status: KycDocumentStatus.APPROVED,
-                    OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-                  },
-                },
-              },
+              promoterOrganisation: verifiedPromoterOrganisationFilter(new Date()),
             },
           },
         },
@@ -165,10 +163,23 @@ export class KisanClubFulfilmentService {
           },
         },
       });
-      if (!relationship) continue;
+      if (!relationship) {
+        this.logger.warn(
+          `No eligible Club promoter for order ${order.orderNumber}: the farmer has no active ` +
+            'promoter assignment, or the assigned promoter is inactive, not club-enabled, or ' +
+            'belongs to an organisation that is not active with an approved unexpired KYC document',
+        );
+        continue;
+      }
       const promoterOrganisationId =
         relationship.promoterUser.kisanClubPromoterProfile?.promoterOrganisationId;
-      if (!promoterOrganisationId) continue;
+      if (!promoterOrganisationId) {
+        this.logger.warn(
+          `Club promoter ${relationship.promoterUserId} has no promoter organisation, so order ` +
+            `${order.orderNumber} cannot be assigned`,
+        );
+        continue;
+      }
       const activePromoterMembership = await tx.organisationMembership.findFirst({
         where: {
           userId: relationship.promoterUserId,
@@ -178,7 +189,14 @@ export class KisanClubFulfilmentService {
         },
         select: { id: true },
       });
-      if (!activePromoterMembership) continue;
+      if (!activePromoterMembership) {
+        this.logger.warn(
+          `Club promoter ${relationship.promoterUserId} holds no active promoter membership in ` +
+            `organisation ${promoterOrganisationId}, so order ${order.orderNumber} cannot be ` +
+            'assigned',
+        );
+        continue;
+      }
       const assistedToken = await tx.kisanClubBenefitToken.findUnique({
         where: { productOrderId: order.id },
         select: { id: true },
@@ -384,15 +402,7 @@ export class KisanClubFulfilmentService {
         promoterUserId,
         clubEnabled: true,
         promoterUser: { status: UserStatus.ACTIVE },
-        promoterOrganisation: {
-          status: OrganisationStatus.ACTIVE,
-          kycDocuments: {
-            some: {
-              status: KycDocumentStatus.APPROVED,
-              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-            },
-          },
-        },
+        promoterOrganisation: verifiedPromoterOrganisationFilter(new Date()),
       },
       select: { id: true, promoterOrganisationId: true },
     });

@@ -4,7 +4,6 @@ import {
   KisanClubAssignmentReason,
   KisanClubAssignmentStatus,
   KisanClubMembershipStatus,
-  KycDocumentStatus,
   MembershipStatus,
   PayoutAccountStatus,
   PlatformRole,
@@ -19,6 +18,10 @@ import { ApiErrorCode } from '../../common/errors/api-error-codes';
 import { PromotersService } from '../../promoters/promoters.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { ReassignKisanClubPromoterDto } from '../dto/reassign-kisan-club-promoter.dto';
+import {
+  approvedKycDocumentFilter,
+  isVerifiedPromoterOrganisation,
+} from '../promoter-eligibility';
 import {
   PromoterMatchingService,
   type PromoterMatchCandidate,
@@ -343,11 +346,9 @@ export class KisanClubAssignmentService {
         promoterOrganisation: {
           select: {
             status: true,
+            type: true,
             kycDocuments: {
-              where: {
-                status: KycDocumentStatus.APPROVED,
-                OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-              },
+              where: approvedKycDocumentFilter(now),
               select: { id: true },
             },
           },
@@ -380,9 +381,7 @@ export class KisanClubAssignmentService {
       clubEnabled: profile.clubEnabled,
       acceptingNewFarmers: profile.acceptingNewFarmers,
       territoryActive: profile.territory?.status === PromoterTerritoryStatus.ACTIVE,
-      kycApproved:
-        profile.promoterOrganisation.status === 'ACTIVE' &&
-        profile.promoterOrganisation.kycDocuments.length > 0,
+      kycApproved: isVerifiedPromoterOrganisation(profile.promoterOrganisation),
       payoutEligible:
         commissionBps === 0 ||
         profile.promoterUser.payoutAccount?.status === PayoutAccountStatus.VERIFIED,

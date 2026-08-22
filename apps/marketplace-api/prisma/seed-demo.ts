@@ -389,8 +389,12 @@ async function seedUsersAndMemberships(): Promise<void> {
       phone: '+919000000032',
     },
     {
+      // The Vardhnam organisation, not the farmer login context. Club
+      // eligibility reads the promoter's membership in whichever organisation
+      // their Kisan Club profile names as promoterOrganisationId, and both
+      // that profile and every promoter attribution below name this one.
       userId: id.promoterUser,
-      organisationId: id.farmerContextOrganisation,
+      organisationId: id.adminOrganisation,
       role: PlatformRole.PROMOTER,
       displayName: 'Demo Promoter',
       phone: '+919000000051',
@@ -465,6 +469,23 @@ async function seedUsersAndMemberships(): Promise<void> {
     });
   }
 
+  // Earlier revisions of this seed put the promoter in the farmer login
+  // context. That membership is not merely redundant: it made the promoter
+  // fail the club eligibility rules (which look for an active membership in
+  // their promoter organisation) and returned an unassigned territory. Retire
+  // it rather than leaving it active -- two active OTP-eligible memberships
+  // turn promoter login into an organisation-selection prompt that the
+  // partner app does not handle.
+  await prisma.organisationMembership.updateMany({
+    where: {
+      userId: id.promoterUser,
+      organisationId: id.farmerContextOrganisation,
+      role: PlatformRole.PROMOTER,
+      status: { not: MembershipStatus.REMOVED },
+    },
+    data: { status: MembershipStatus.REMOVED },
+  });
+
   await prisma.deliveryPartnerProfile.upsert({
     where: {
       userId_organisationId: {
@@ -524,6 +545,11 @@ async function seedOnboardingProfiles(): Promise<void> {
 
   // An organisation cannot be approved without at least one approved KYC
   // document, so both onboarded organisations get a mock GST certificate.
+  // The Vardhnam organisation is deliberately absent: onboarding accepts KYC
+  // documents only for company and distributor organisations, so seeding one
+  // here would model a state the application itself refuses to create. Club
+  // eligibility treats a first-party organisation as verified instead --
+  // see src/kisan-club/promoter-eligibility.ts.
   for (const [organisationId, documentNumber] of [
     [id.companyOrganisation, '08AACCD1234E1Z2'],
     [id.distributorOrganisation, '08ABCDE1234F1Z5'],
