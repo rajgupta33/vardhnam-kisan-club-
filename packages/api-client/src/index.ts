@@ -838,6 +838,26 @@ export interface PromoterTerritory {
   updatedAt: string;
 }
 
+/**
+ * One choice in a territory selector.
+ *
+ * Narrower than `PromoterTerritory` on purpose: a form needs to identify and
+ * label a territory, not carry its pincode and village arrays.
+ */
+export interface PromoterTerritoryOption {
+  id: string;
+  name: string;
+  state: string;
+  district: string;
+  status: PromoterTerritoryStatus;
+}
+
+/** Selector feeds are complete by definition, so there is no page to report. */
+export interface OptionsResult<TItem> {
+  items: TItem[];
+  total: number;
+}
+
 export interface PromoterTerritoryQuery {
   status?: PromoterTerritoryStatus;
   q?: string;
@@ -904,6 +924,20 @@ export interface UpsertKisanClubPromoterProfileInput {
 }
 
 export type KisanClubProgrammeStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'ENDED';
+
+/**
+ * One choice in a programme selector.
+ *
+ * Carries the product and variant names because a programme has no name of
+ * its own and operators recognise it by the product it covers.
+ */
+export interface KisanClubProgrammeOption {
+  id: string;
+  status: KisanClubProgrammeStatus;
+  displayPriority: number;
+  productName: string;
+  variantName?: string | null;
+}
 
 export interface KisanClubProductProgramme {
   id: string;
@@ -3077,6 +3111,13 @@ export class VardhnamApiClient {
     );
   }
 
+  /** Every territory, for form selectors. See `PromoterTerritoryOption`. */
+  listPromoterTerritoryOptions(): Promise<OptionsResult<PromoterTerritoryOption>> {
+    return this.request<OptionsResult<PromoterTerritoryOption>>(
+      '/api/v1/kisan-club/territories/options',
+    );
+  }
+
   createPromoterTerritory(input: CreatePromoterTerritoryInput): Promise<PromoterTerritory> {
     return this.request<PromoterTerritory>('/api/v1/kisan-club/territories', {
       method: 'POST',
@@ -3116,6 +3157,13 @@ export class VardhnamApiClient {
   ): Promise<PaginatedResult<KisanClubProductProgramme>> {
     return this.request<PaginatedResult<KisanClubProductProgramme>>(
       `/api/v1/kisan-club/programmes${this.toQueryString(this.kisanClubProgrammeQueryParams(query))}`,
+    );
+  }
+
+  /** Every programme, for benefit-rule selectors. See `KisanClubProgrammeOption`. */
+  listKisanClubProgrammeOptions(): Promise<OptionsResult<KisanClubProgrammeOption>> {
+    return this.request<OptionsResult<KisanClubProgrammeOption>>(
+      '/api/v1/kisan-club/programmes/options',
     );
   }
 

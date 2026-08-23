@@ -901,6 +901,7 @@ Every farm, cycle and activity mutation writes an audit record in the same datab
 
 All routes below are under `/api/v1/kisan-club`, require authentication and return `404 NOT_FOUND` when `KISAN_CLUB_ENABLED=false`.
 
+- `GET /territories/options` returns every territory as `{ items, total }` with `id`, `name`, `state`, `district` and `status`, unfiltered and unpaged, for form selectors. It requires **either** `kisan-club-territories:manage` **or** `kisan-club-promoter-profiles:manage`, because a promoter-profile manager must be able to pick a territory without also administering coverage. Do not populate a selector from `GET /territories`: that feed is filtered and paged, so it silently omits valid choices.
 - `GET /territories` requires `kisan-club-territories:manage` and supports `status`, `q`, `page` and `limit`. `POST /territories` creates a controlled territory; `PATCH /territories/:territoryId` updates or inactivates it. Active assignments must be reassigned before inactivation.
 - `GET /promoter-profiles` requires `kisan-club-promoter-profiles:manage` and supports `territoryId`, exact `clubEnabled`, `page` and `limit`. `POST /promoter-profiles` creates or updates the profile identified by `promoterUserId` after server validation of organisation membership, territory, KYC, capacity and conditional payout eligibility.
 - `POST /memberships/:membershipId/reassign-promoter` requires `kisan-club-assignments:manage`, a required `assignmentReason` and audit `reason`. Supplying `promoterUserId` performs an eligibility-checked manual assignment; omitting it requires `AUTO_MATCHED` and uses deterministic matching. The member must have completed the farm profile.
@@ -913,6 +914,7 @@ Reassignment serializably ends the prior Club assignment, updates both capacity 
 
 All routes below are under `/api/v1/kisan-club`, require authentication and return `404 NOT_FOUND` when `KISAN_CLUB_ENABLED=false`.
 
+- `GET /programmes/options` returns every programme as `{ items, total }` with `id`, `status`, `displayPriority`, `productName` and nullable `variantName`, unfiltered and unpaged, for benefit-rule selectors. It requires **either** `kisan-club-programmes:manage` **or** `kisan-club-benefits:manage`. Product and variant names travel with each row because a programme has no name of its own. Do not populate a selector from `GET /programmes`.
 - `GET /programmes` requires `kisan-club-programmes:manage` and supports exact `status`, `productId`, `page` and `limit` filters.
 - `POST /programmes` requires the same permission and creates a `DRAFT` programme for an approved Vardhnam-owned product. It accepts optional active `variantId`, UTC `startsAt`/`endsAt`, pincode/district lists, display priority and a required audit reason. Duplicate product/variant or product-wide enrolment returns `409`.
 - `PATCH /programmes/:programmeId` updates programme scope or performs a validated lifecycle transition. Status changes require a reason; ended programmes are immutable.

@@ -38,6 +38,15 @@ export class KisanClubAssignmentController {
     private readonly promoterAdminService: KisanClubPromoterAdminService,
   ) {}
 
+  // Declared before the parameterised territory routes so `options` is never
+  // parsed as a territory id. Permissions are checked in the service: either
+  // territory or promoter-profile management may read this, and
+  // @RequirePermissions can only express AND.
+  @Get('territories/options')
+  listTerritoryOptions(@CurrentUserContext() actor: CurrentUser) {
+    return this.promoterAdminService.listTerritoryOptions(actor);
+  }
+
   @Get('territories')
   @RequirePermissions(PermissionCode.KISAN_CLUB_TERRITORIES_MANAGE)
   listTerritories(@Query() query: ListPromoterTerritoriesQueryDto) {

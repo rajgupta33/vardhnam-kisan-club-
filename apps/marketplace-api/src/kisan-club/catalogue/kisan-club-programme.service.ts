@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CatalogueStatus,
   KisanClubProgrammeStatus,
@@ -6,6 +12,7 @@ import {
   Prisma,
   type KisanClubProductProgramme,
 } from '@prisma/client';
+import { PermissionCode } from '../../access/permission-codes';
 import { AuditService } from '../../audit/audit.service';
 import type { CurrentUser } from '../../auth/current-user.interface';
 import { paginationOffset } from '../../common/dto/pagination-query.dto';
@@ -37,6 +44,57 @@ export class KisanClubProgrammeService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * Every programme a benefit rule could legitimately be attached to.
+   *
+   * The benefit form used to be populated from the paged, filtered programme
+   * queue, so filtering that queue to ACTIVE made a DRAFT programme
+   * unselectable and anything past the page size disappeared without a
+   * message. A benefit rule pointed at the wrong programme is a pricing
+   * error, so the selector gets its own complete feed.
+   *
+   * Product name travels with each row because a programme has no name of
+   * its own -- operators recognise it by the product it covers, and an
+   * option list of bare UUIDs is unusable.
+   */
+  async listProgrammeOptions(actor: CurrentUser) {
+    this.ensureProgrammeOptionsPermission(actor);
+    const programmes = await this.prisma.kisanClubProductProgramme.findMany({
+      orderBy: [{ displayPriority: 'desc' }, { createdAt: 'desc' }],
+      select: {
+        id: true,
+        status: true,
+        displayPriority: true,
+        product: { select: { name: true } },
+        variant: { select: { variantName: true } },
+      },
+    });
+    const items = programmes.map((programme) => ({
+      id: programme.id,
+      status: programme.status,
+      displayPriority: programme.displayPriority,
+      productName: programme.product.name,
+      variantName: programme.variant?.variantName ?? null,
+    }));
+    return { items, total: items.length };
+  }
+
+  /**
+   * Benefit managers need this list to do their own job, and the guard
+   * decorator can only express AND -- so the check lives here.
+   */
+  private ensureProgrammeOptionsPermission(actor: CurrentUser): void {
+    if (
+      !actor.permissions.includes(PermissionCode.KISAN_CLUB_PROGRAMMES_MANAGE) &&
+      !actor.permissions.includes(PermissionCode.KISAN_CLUB_BENEFITS_MANAGE)
+    ) {
+      throw new ForbiddenException({
+        code: ApiErrorCode.FORBIDDEN,
+        message: 'You do not have permission to perform this action',
+      });
+    }
+  }
 
   async listProgrammes(query: ListKisanClubProgrammesQueryDto) {
     const { page, limit, skip } = paginationOffset(query);

@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   KycDocumentStatus,
@@ -12,6 +17,7 @@ import {
   type KisanClubPromoterProfile,
   type PromoterTerritory,
 } from '@prisma/client';
+import { PermissionCode } from '../../access/permission-codes';
 import { AuditService, type AuditRecordInput } from '../../audit/audit.service';
 import type { CurrentUser } from '../../auth/current-user.interface';
 import { paginationOffset } from '../../common/dto/pagination-query.dto';
@@ -32,6 +38,55 @@ export class KisanClubPromoterAdminService {
     private readonly auditService: AuditService,
     private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * Every territory a selector could legitimately offer.
+   *
+   * Separate from `listTerritories` on purpose. That feed is filtered and
+   * paged for the management queue, and reusing it to populate the promoter
+   * form silently narrowed the form to whatever the queue happened to be
+   * showing: filter the queue to ACTIVE and an inactive territory became
+   * unselectable, and past the queue's page size the tail vanished with no
+   * error. A selector must offer the complete set or it is quietly wrong.
+   *
+   * Deliberately unpaged. Territories are administrative geography -- tens,
+   * not thousands -- and a paged selector is the bug this method exists to
+   * remove. The projection stays narrow so the payload is a selector, not a
+   * second copy of the management list.
+   */
+  async listTerritoryOptions(actor: CurrentUser) {
+    this.ensureTerritoryOptionsPermission(actor);
+    const items = await this.prisma.promoterTerritory.findMany({
+      orderBy: [{ status: 'asc' }, { state: 'asc' }, { district: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        state: true,
+        district: true,
+        status: true,
+      },
+    });
+    return { items, total: items.length };
+  }
+
+  /**
+   * Either permission that has a real use for the selector opens it.
+   *
+   * Requiring territory management would lock out the promoter-profile
+   * managers who are the main consumers -- they have to pick a territory to
+   * do their own job -- and the guard decorator can only express AND.
+   */
+  private ensureTerritoryOptionsPermission(actor: CurrentUser): void {
+    if (
+      !actor.permissions.includes(PermissionCode.KISAN_CLUB_TERRITORIES_MANAGE) &&
+      !actor.permissions.includes(PermissionCode.KISAN_CLUB_PROMOTER_PROFILES_MANAGE)
+    ) {
+      throw new ForbiddenException({
+        code: ApiErrorCode.FORBIDDEN,
+        message: 'You do not have permission to perform this action',
+      });
+    }
+  }
 
   async listTerritories(query: ListPromoterTerritoriesQueryDto) {
     const { page, limit, skip } = paginationOffset(query);

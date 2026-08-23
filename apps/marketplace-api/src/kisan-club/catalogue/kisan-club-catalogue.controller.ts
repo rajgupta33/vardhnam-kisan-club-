@@ -61,6 +61,14 @@ export class KisanClubCatalogueController {
     return this.catalogueService.getProduct(productId, query, actor);
   }
 
+  // Before the parameterised programme routes, and permission-checked in the
+  // service: benefit managers need this selector as much as programme
+  // managers do, which @RequirePermissions cannot express.
+  @Get('programmes/options')
+  listProgrammeOptions(@CurrentUserContext() actor: CurrentUser) {
+    return this.programmeService.listProgrammeOptions(actor);
+  }
+
   @Get('programmes')
   @RequirePermissions(PermissionCode.KISAN_CLUB_PROGRAMMES_MANAGE)
   listProgrammes(@Query() query: ListKisanClubProgrammesQueryDto) {

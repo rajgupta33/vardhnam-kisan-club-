@@ -23,8 +23,11 @@ import {
   type KisanClubMembershipQuery,
   type KisanClubPromoterProfile,
   type KisanClubPromoterProfileQuery,
+  type OptionsResult,
+  type PromoterTerritoryOption,
   type KisanClubProductProgramme,
   type KisanClubProgrammeQuery,
+  type KisanClubProgrammeOption,
   type KisanClubBenefitRule,
   type KisanClubBenefitRuleQuery,
   type KisanClubFulfilmentAssignment,
@@ -190,6 +193,24 @@ export async function loadPromoterTerritories(
   }
 }
 
+/**
+ * The complete territory list, for form selectors.
+ *
+ * Kept apart from `loadPromoterTerritories` so the management queue can be
+ * filtered and paged without narrowing the choices a form offers.
+ */
+export async function loadPromoterTerritoryOptions(): Promise<
+  PortalResult<OptionsResult<PromoterTerritoryOption>>
+> {
+  const { client, config } = await createBusinessApiClient();
+  if (!client) return missingConfigResult(config);
+  try {
+    return { ok: true, config, data: await client.listPromoterTerritoryOptions() };
+  } catch (error) {
+    return { ok: false, config, error: formatApiError(error) };
+  }
+}
+
 export async function createPromoterTerritory(
   input: CreatePromoterTerritoryInput,
 ): Promise<PromoterTerritory> {
@@ -234,6 +255,19 @@ export async function loadKisanClubProgrammes(
   if (!client) return missingConfigResult(config);
   try {
     return { ok: true, config, data: await client.listKisanClubProgrammes(query) };
+  } catch (error) {
+    return { ok: false, config, error: formatApiError(error) };
+  }
+}
+
+/** The complete programme list, for benefit-rule selectors. */
+export async function loadKisanClubProgrammeOptions(): Promise<
+  PortalResult<OptionsResult<KisanClubProgrammeOption>>
+> {
+  const { client, config } = await createBusinessApiClient();
+  if (!client) return missingConfigResult(config);
+  try {
+    return { ok: true, config, data: await client.listKisanClubProgrammeOptions() };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }

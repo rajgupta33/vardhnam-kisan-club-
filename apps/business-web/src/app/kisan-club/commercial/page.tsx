@@ -3,15 +3,21 @@ import type {
   KisanClubBenefitStatus,
   KisanClubBenefitType,
   KisanClubProductProgramme,
+  KisanClubProgrammeOption,
   KisanClubProgrammeStatus,
 } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
 import { ConfirmSubmitButton } from '../../../components/confirm-submit-button';
 import { EmptyState } from '../../../components/empty-state';
+import { Pagination } from '../../../components/pagination';
 import { StatusBadge } from '../../../components/status-badge';
 import { readPortalSession } from '../../../lib/auth-session';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
-import { loadKisanClubBenefitRules, loadKisanClubProgrammes } from '../../../lib/marketplace-api';
+import {
+  loadKisanClubBenefitRules,
+  loadKisanClubProgrammeOptions,
+  loadKisanClubProgrammes,
+} from '../../../lib/marketplace-api';
 import {
   createBenefitRuleAction,
   createProgrammeAction,
@@ -22,6 +28,8 @@ import {
 export const dynamic = 'force-dynamic';
 type SearchParams = Record<string, string | string[] | undefined>;
 const programmeStatuses: KisanClubProgrammeStatus[] = ['DRAFT', 'ACTIVE', 'PAUSED', 'ENDED'];
+// Matches the other Kisan Club queues. Both lists page independently.
+const listLimit = 25;
 const benefitStatuses: KisanClubBenefitStatus[] = ['DRAFT', 'ACTIVE', 'PAUSED', 'EXPIRED'];
 const benefitTypes: KisanClubBenefitType[] = [
   'FLAT_AMOUNT_OFF',
@@ -43,26 +51,38 @@ export default async function KisanClubCommercialPage({
   const productId = readParam(params.productId)?.trim() || undefined;
   const benefitStatus = parseAllowed(readParam(params.benefitStatus), benefitStatuses);
   const programmeId = readParam(params.programmeId)?.trim() || undefined;
-  const [programmeResult, benefitResult] = await Promise.all([
+  const programmePage = positiveInteger(readParam(params.programmePage), 1);
+  const benefitPage = positiveInteger(readParam(params.benefitPage), 1);
+
+  // The third request is the complete programme list that the benefit filter
+  // and create form select from. Sharing the paged programme queue meant
+  // filtering it to ACTIVE made a DRAFT programme unselectable, and anything
+  // past the page size silently disappeared -- on a form whose output is a
+  // pricing rule.
+  const [programmeResult, benefitResult, programmeOptionsResult] = await Promise.all([
     canManageProgrammes
       ? loadKisanClubProgrammes({
           ...(programmeStatus ? { status: programmeStatus } : {}),
           ...(productId ? { productId } : {}),
-          page: 1,
-          limit: 100,
+          page: programmePage,
+          limit: listLimit,
         })
       : Promise.resolve(null),
     canManageBenefits
       ? loadKisanClubBenefitRules({
           ...(benefitStatus ? { status: benefitStatus } : {}),
           ...(programmeId ? { programmeId } : {}),
-          page: 1,
-          limit: 100,
+          page: benefitPage,
+          limit: listLimit,
         })
+      : Promise.resolve(null),
+    canManageProgrammes || canManageBenefits
+      ? loadKisanClubProgrammeOptions()
       : Promise.resolve(null),
   ]);
   const programmes = programmeResult?.ok ? programmeResult.data.items : [];
   const rules = benefitResult?.ok ? benefitResult.data.items : [];
+  const programmeOptions = programmeOptionsResult?.ok ? programmeOptionsResult.data.items : [];
 
   return (
     <BusinessShell
@@ -99,19 +119,25 @@ export default async function KisanClubCommercialPage({
       </section>
       {canManageProgrammes ? (
         <ProgrammeWorkspace
+          buildPageHref={(target) => workspaceHref(params, { programmePage: String(target) })}
           error={programmeResult && !programmeResult.ok ? programmeResult.error : undefined}
+          page={programmePage}
           productId={productId}
           programmes={programmes}
           selectedStatus={programmeStatus}
+          total={programmeResult?.ok ? programmeResult.data.total : 0}
         />
       ) : null}
       {canManageBenefits ? (
         <BenefitWorkspace
+          buildPageHref={(target) => workspaceHref(params, { benefitPage: String(target) })}
           error={benefitResult && !benefitResult.ok ? benefitResult.error : undefined}
-          programmes={programmes}
+          page={benefitPage}
+          programmes={programmeOptions}
           rules={rules}
           selectedProgrammeId={programmeId}
           selectedStatus={benefitStatus}
+          total={benefitResult?.ok ? benefitResult.data.total : 0}
         />
       ) : null}
     </BusinessShell>
@@ -123,11 +149,17 @@ function ProgrammeWorkspace({
   selectedStatus,
   productId,
   error,
+  page,
+  total,
+  buildPageHref,
 }: {
   programmes: KisanClubProductProgramme[];
   selectedStatus?: KisanClubProgrammeStatus | undefined;
   productId?: string | undefined;
   error?: string | undefined;
+  page: number;
+  total: number;
+  buildPageHref: (page: number) => string;
 }) {
   return (
     <>
@@ -173,6 +205,9 @@ function ProgrammeWorkspace({
             <ProgrammeEditForm key={programme.id} programme={programme} />
           ))}
         </section>
+      )}
+      {error ? null : (
+        <Pagination buildHref={buildPageHref} limit={listLimit} page={page} total={total} />
       )}
     </>
   );
@@ -311,12 +346,19 @@ function BenefitWorkspace({
   selectedStatus,
   selectedProgrammeId,
   error,
+  page,
+  total,
+  buildPageHref,
 }: {
   rules: KisanClubBenefitRule[];
-  programmes: KisanClubProductProgramme[];
+  /** The complete programme list, never the paged management queue. */
+  programmes: KisanClubProgrammeOption[];
   selectedStatus?: KisanClubBenefitStatus | undefined;
   selectedProgrammeId?: string | undefined;
   error?: string | undefined;
+  page: number;
+  total: number;
+  buildPageHref: (page: number) => string;
 }) {
   return (
     <>
@@ -334,7 +376,7 @@ function BenefitWorkspace({
               <option value="">All programmes</option>
               {programmes.map((programme) => (
                 <option key={programme.id} value={programme.id}>
-                  {programme.product.name} — {programme.id.slice(0, 8)}
+                  {programmeOptionLabel(programme)}
                 </option>
               ))}
             </select>
@@ -370,11 +412,14 @@ function BenefitWorkspace({
           ))}
         </section>
       )}
+      {error ? null : (
+        <Pagination buildHref={buildPageHref} limit={listLimit} page={page} total={total} />
+      )}
     </>
   );
 }
 
-function BenefitCreateForm({ programmes }: { programmes: KisanClubProductProgramme[] }) {
+function BenefitCreateForm({ programmes }: { programmes: KisanClubProgrammeOption[] }) {
   return (
     <form action={createBenefitRuleAction} className="panel rejectForm">
       <div>
@@ -388,7 +433,7 @@ function BenefitCreateForm({ programmes }: { programmes: KisanClubProductProgram
             <option value="">Select programme</option>
             {programmes.map((programme) => (
               <option key={programme.id} value={programme.id}>
-                {programme.product.name} — {programme.id.slice(0, 8)}
+                {programmeOptionLabel(programme)}
               </option>
             ))}
           </select>
@@ -584,6 +629,47 @@ function statusTone(status: string): 'ok' | 'warn' | 'danger' {
       ? 'danger'
       : 'warn';
 }
+/**
+ * How a programme is named in a selector.
+ *
+ * A programme has no name of its own, so it is identified by the product it
+ * covers. The variant is included when there is one, because two programmes
+ * over different pack sizes of the same product are otherwise identical on
+ * screen. The id fragment stays as the final tie-breaker.
+ */
+function programmeOptionLabel(programme: KisanClubProgrammeOption): string {
+  const product = programme.variantName
+    ? `${programme.productName} (${programme.variantName})`
+    : programme.productName;
+  return `${product} — ${programme.id.slice(0, 8)}`;
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Rebuilds this page URL with one page parameter changed, so paging the
+ * programme list does not reset where the benefit list was, or vice versa.
+ */
+function workspaceHref(params: SearchParams, overrides: Record<string, string>): string {
+  const query = new URLSearchParams();
+  for (const key of [
+    'programmeStatus',
+    'productId',
+    'benefitStatus',
+    'programmeId',
+    'programmePage',
+    'benefitPage',
+  ]) {
+    const value = readParam(params[key]);
+    if (value) query.set(key, value);
+  }
+  for (const [key, value] of Object.entries(overrides)) query.set(key, value);
+  return `/kisan-club/commercial?${query.toString()}`;
+}
+
 function readParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }

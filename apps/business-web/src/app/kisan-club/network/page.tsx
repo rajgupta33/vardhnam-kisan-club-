@@ -1,17 +1,20 @@
 import type {
   KisanClubPromoterProfile,
   PromoterTerritory,
+  PromoterTerritoryOption,
   PromoterTerritoryStatus,
 } from '@vardhnam/api-client';
 import { BusinessShell } from '../../../components/business-shell';
 import { ConfirmSubmitButton } from '../../../components/confirm-submit-button';
 import { EmptyState } from '../../../components/empty-state';
+import { Pagination } from '../../../components/pagination';
 import { StatusBadge } from '../../../components/status-badge';
 import { readPortalSession } from '../../../lib/auth-session';
 import { labelFromCode } from '../../../lib/format';
 import {
   loadKisanClubPromoterProfiles,
   loadPromoterTerritories,
+  loadPromoterTerritoryOptions,
 } from '../../../lib/marketplace-api';
 import {
   createTerritoryAction,
@@ -22,6 +25,9 @@ import {
 export const dynamic = 'force-dynamic';
 type SearchParams = Record<string, string | string[] | undefined>;
 const territoryStatuses: PromoterTerritoryStatus[] = ['ACTIVE', 'INACTIVE'];
+// Matches the other Kisan Club queues. Both lists on this page page
+// independently, so each carries its own page parameter.
+const listLimit = 25;
 
 export default async function KisanClubNetworkPage({
   searchParams,
@@ -37,27 +43,39 @@ export default async function KisanClubNetworkPage({
   const territoryQuery = readParam(params.territoryQuery)?.trim() || undefined;
   const profileTerritoryId = readParam(params.profileTerritoryId)?.trim() || undefined;
   const clubEnabled = parseBoolean(readParam(params.clubEnabled));
+  const territoryPage = positiveInteger(readParam(params.territoryPage), 1);
+  const profilePage = positiveInteger(readParam(params.profilePage), 1);
 
-  const [territoryResult, profileResult] = await Promise.all([
+  // Three requests, not two. The first two are the filtered, paged management
+  // queues; the third is the complete territory list that the promoter filter
+  // and form select from. They were once the same request, which meant
+  // filtering the queue to ACTIVE also removed every inactive territory from
+  // the promoter form, and any territory past the page size vanished from it
+  // with no error shown.
+  const [territoryResult, profileResult, territoryOptionsResult] = await Promise.all([
     canManageTerritories
       ? loadPromoterTerritories({
           ...(territoryStatus ? { status: territoryStatus } : {}),
           ...(territoryQuery ? { q: territoryQuery } : {}),
-          page: 1,
-          limit: 100,
+          page: territoryPage,
+          limit: listLimit,
         })
       : Promise.resolve(null),
     canManageProfiles
       ? loadKisanClubPromoterProfiles({
           ...(profileTerritoryId ? { territoryId: profileTerritoryId } : {}),
           ...(clubEnabled !== undefined ? { clubEnabled } : {}),
-          page: 1,
-          limit: 100,
+          page: profilePage,
+          limit: listLimit,
         })
+      : Promise.resolve(null),
+    canManageTerritories || canManageProfiles
+      ? loadPromoterTerritoryOptions()
       : Promise.resolve(null),
   ]);
   const territories = territoryResult?.ok ? territoryResult.data.items : [];
   const profiles = profileResult?.ok ? profileResult.data.items : [];
+  const territoryOptions = territoryOptionsResult?.ok ? territoryOptionsResult.data.items : [];
 
   return (
     <BusinessShell
@@ -88,20 +106,26 @@ export default async function KisanClubNetworkPage({
 
       {canManageTerritories ? (
         <TerritoryWorkspace
+          buildPageHref={(target) => workspaceHref(params, { territoryPage: String(target) })}
           {...(territoryResult && !territoryResult.ok ? { error: territoryResult.error } : {})}
+          page={territoryPage}
           {...(territoryQuery ? { query: territoryQuery } : {})}
           {...(territoryStatus ? { selectedStatus: territoryStatus } : {})}
           territories={territories}
+          total={territoryResult?.ok ? territoryResult.data.total : 0}
         />
       ) : null}
 
       {canManageProfiles ? (
         <PromoterWorkspace
+          buildPageHref={(target) => workspaceHref(params, { profilePage: String(target) })}
           {...(clubEnabled !== undefined ? { clubEnabled } : {})}
           {...(profileResult && !profileResult.ok ? { error: profileResult.error } : {})}
+          page={profilePage}
           profiles={profiles}
           {...(profileTerritoryId ? { selectedTerritoryId: profileTerritoryId } : {})}
-          territories={territories}
+          territories={territoryOptions}
+          total={profileResult?.ok ? profileResult.data.total : 0}
         />
       ) : null}
     </BusinessShell>
@@ -113,11 +137,17 @@ function TerritoryWorkspace({
   selectedStatus,
   query,
   error,
+  page,
+  total,
+  buildPageHref,
 }: {
   territories: PromoterTerritory[];
   selectedStatus?: PromoterTerritoryStatus;
   query?: string;
   error?: string;
+  page: number;
+  total: number;
+  buildPageHref: (page: number) => string;
 }) {
   return (
     <>
@@ -173,6 +203,9 @@ function TerritoryWorkspace({
             />
           ))}
         </section>
+      )}
+      {error ? null : (
+        <Pagination buildHref={buildPageHref} limit={listLimit} page={page} total={total} />
       )}
     </>
   );
@@ -282,12 +315,19 @@ function PromoterWorkspace({
   selectedTerritoryId,
   clubEnabled,
   error,
+  page,
+  total,
+  buildPageHref,
 }: {
   profiles: KisanClubPromoterProfile[];
-  territories: PromoterTerritory[];
+  /** The complete territory list, never the paged management queue. */
+  territories: PromoterTerritoryOption[];
   selectedTerritoryId?: string;
   clubEnabled?: boolean;
   error?: string;
+  page: number;
+  total: number;
+  buildPageHref: (page: number) => string;
 }) {
   return (
     <>
@@ -351,6 +391,9 @@ function PromoterWorkspace({
           ))}
         </section>
       )}
+      {error ? null : (
+        <Pagination buildHref={buildPageHref} limit={listLimit} page={page} total={total} />
+      )}
     </>
   );
 }
@@ -361,7 +404,7 @@ function PromoterForm({
   profile,
 }: {
   title: string;
-  territories: PromoterTerritory[];
+  territories: PromoterTerritoryOption[];
   profile?: KisanClubPromoterProfile;
 }) {
   return (
@@ -468,6 +511,34 @@ function PromoterForm({
       </ConfirmSubmitButton>
     </form>
   );
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Rebuilds this page URL with one page parameter changed.
+ *
+ * Both filter sets and both page numbers survive, so paging the territory
+ * list does not reset where the promoter list was, or vice versa.
+ */
+function workspaceHref(params: SearchParams, overrides: Record<string, string>): string {
+  const query = new URLSearchParams();
+  for (const key of [
+    'territoryStatus',
+    'territoryQuery',
+    'profileTerritoryId',
+    'clubEnabled',
+    'territoryPage',
+    'profilePage',
+  ]) {
+    const value = readParam(params[key]);
+    if (value) query.set(key, value);
+  }
+  for (const [key, value] of Object.entries(overrides)) query.set(key, value);
+  return `/kisan-club/network?${query.toString()}`;
 }
 
 function readParam(value: string | string[] | undefined): string | undefined {
