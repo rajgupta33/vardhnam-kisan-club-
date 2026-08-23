@@ -85,6 +85,11 @@ jobs:
       - name: Scaffold self-check
         run: npm run test:scaffold
 
+      # Runs in the Node job rather than either Flutter job: it checks both
+      # apps at once and needs no Flutter toolchain.
+      - name: Check translation catalogues
+        run: npm run check:i18n
+
       - name: Build
         run: npm run build
 

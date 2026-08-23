@@ -20,6 +20,7 @@
     "format:write": "prettier --write .",
     "test": "npm run test --workspaces --if-present",
     "test:scaffold": "node --test scripts/phase0.test.mjs",
+    "check:i18n": "node scripts/check-arb-parity.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "prisma:generate": "npm --workspace @vardhnam/marketplace-api run prisma:generate",
     "prisma:migrate": "npm --workspace @vardhnam/marketplace-api run prisma:migrate",
