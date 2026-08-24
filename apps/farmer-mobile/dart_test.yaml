@@ -4,10 +4,9 @@
 # compares bytes exactly.
 #
 # CI runs on ubuntu-latest, so Linux is the platform these goldens are generated
-# for and the only one they are authoritative on. Regenerate them with:
-#
-#   docker run --rm -v "$PWD/../..:/repo" -w /repo/apps/farmer-mobile \
-#     <a linux flutter image> flutter test --update-goldens test/golden
+# for and the only one they are authoritative on. tool/golden-linux.Dockerfile
+# builds a container pinned to the same Flutter version and carries the exact
+# commands for regenerating them.
 #
 # Running them on another platform reports failures that say nothing about the
 # code, so they are skipped there rather than left to cry wolf. Every other test
