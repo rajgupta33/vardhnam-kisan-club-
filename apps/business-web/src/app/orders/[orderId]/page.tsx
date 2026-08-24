@@ -14,11 +14,18 @@ import { StatusBadge } from '../../../components/status-badge';
 import { formatDateTime, labelFromCode } from '../../../lib/format';
 import { loadFulfilmentInvoicePdf, loadFulfilmentOrderDetail } from '../../../lib/marketplace-api';
 import {
+  canIssuePickupCode,
+  orderHandoffTtlSeconds,
+  readOrderHandoffCredentials,
+  type OrderHandoffCredentials,
+} from '../../../lib/order-handoff';
+import {
   acceptOrderAction,
   assignDeliveryAction,
   completeDeliveryAction,
   downloadInvoicePdfAction,
   generateInvoiceAction,
+  issuePickupCodeAction,
   markOutForDeliveryAction,
   markReadyForPickupAction,
   markReadyToPackAction,
@@ -42,6 +49,7 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
   const result = await loadFulfilmentOrderDetail(orderId);
   const notice = readParam(resolvedSearchParams.notice);
   const error = readParam(resolvedSearchParams.error);
+  const handoffCredentials = await readOrderHandoffCredentials(orderId);
 
   if (!result.ok && result.error.includes('NOT_FOUND')) {
     notFound();
@@ -126,6 +134,7 @@ export default async function OrderDetailPage({ params, searchParams }: OrderDet
             order={order}
           />
           <DispatchPanel order={order} />
+          <PickupHandoffPanel credentials={handoffCredentials} order={order} />
           <DeliveryAssignmentPanel order={order} />
 
           <section className="panel" aria-label="Order items">
@@ -551,6 +560,110 @@ function DispatchPanel({ order }: { order: ProductOrder }) {
         <DetailField label="Ready at" value={formatDateTime(dispatch.readyAt)} />
         <DetailField label="Ready note" value={dispatch.readyForPickupReason} />
       </dl>
+    </section>
+  );
+}
+
+/**
+ * The pickup code and the farmer OTP are both returned exactly once and stored
+ * only as hashes, so neither can be re-read from the order. Without this panel
+ * the delivery partner has no way to obtain the code their app asks for, which
+ * strands every order at ready-for-pickup.
+ */
+function PickupHandoffPanel({
+  order,
+  credentials,
+}: {
+  order: ProductOrder;
+  credentials: OrderHandoffCredentials;
+}) {
+  if (!order.dispatch) {
+    return null;
+  }
+
+  const dispatch = order.dispatch;
+  const assignment = order.deliveryAssignment;
+  const pickupVerified = Boolean(assignment?.pickupVerifiedAt);
+  const canIssue = canIssuePickupCode(order);
+
+  return (
+    <section className="panel" aria-label="Delivery handoff credentials">
+      <div className="rowHeader">
+        <div>
+          <p className="eyebrow">Delivery handoff</p>
+          <h3>Pickup Code and Farmer OTP</h3>
+        </div>
+        <StatusBadge
+          label={pickupVerified ? 'Pickup verified' : 'Pickup pending'}
+          tone={pickupVerified ? 'ok' : 'warn'}
+        />
+      </div>
+
+      {credentials.pickupCode ? (
+        <div className="handoffCredential">
+          <p className="eyebrow">Pickup code for the delivery partner</p>
+          <code className="handoffCode">{credentials.pickupCode}</code>
+          <p className="mutedText">
+            The partner app accepts this under &ldquo;Enter pickup code&rdquo;. It disappears after{' '}
+            {orderHandoffTtlSeconds / 60} minutes; issue it again below if it is lost.
+          </p>
+        </div>
+      ) : null}
+
+      {credentials.deliveryOtp ? (
+        <div className="handoffCredential">
+          <p className="eyebrow">Farmer delivery OTP</p>
+          <code className="handoffCode">{credentials.deliveryOtp}</code>
+          <p className="mutedText">
+            Shown only while SMS is mocked. It is entered at delivery completion, not at pickup.
+          </p>
+        </div>
+      ) : null}
+
+      <dl className="definitionGrid threeColumn">
+        <DetailField label="Order ID" value={order.id} />
+        <DetailField label="Dispatch number" value={dispatch.dispatchNumber} />
+        <DetailField label="Assignment number" value={assignment?.assignmentNumber} />
+        <DetailField label="Delivery partner user" value={assignment?.deliveryPartnerUserId} />
+        <DetailField
+          label="Pickup code issued"
+          value={formatDateTime(dispatch.packageQrIssuedAt)}
+        />
+        <DetailField label="Pickup verified" value={formatDateTime(assignment?.pickupVerifiedAt)} />
+        <DetailField
+          label="Pickup attempts"
+          value={assignment?.pickupVerificationAttemptCount ?? 0}
+        />
+        <DetailField label="OTP expires" value={formatDateTime(assignment?.otpExpiresAt)} />
+      </dl>
+
+      <div className="actionCluster">
+        <form action={issuePickupCodeAction} className="inlineForm">
+          <input name="orderId" type="hidden" value={order.id} />
+          <label>
+            Label note
+            <input
+              disabled={!canIssue}
+              name="reason"
+              placeholder="Label printed for partner handoff"
+              type="text"
+            />
+          </label>
+          <p className="mutedText">
+            {pickupVerified
+              ? 'Pickup is already verified, so the code cannot be reissued.'
+              : canIssue
+                ? 'Issuing replaces any previous code for this dispatch.'
+                : 'Available once the order and its dispatch are ready for pickup.'}
+          </p>
+          <ConfirmSubmitButton
+            confirmMessage="Issue a new pickup code? Any previously issued code stops working."
+            disabled={!canIssue}
+          >
+            {dispatch.packageQrIssuedAt ? 'Reissue pickup code' : 'Issue pickup code'}
+          </ConfirmSubmitButton>
+        </form>
+      </div>
     </section>
   );
 }

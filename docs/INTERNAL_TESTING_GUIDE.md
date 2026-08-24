@@ -225,13 +225,24 @@ flutter build apk --debug --dart-define=MARKETPLACE_API_BASE_URL=https://marketp
 6. Ask an operations tester to assign a ready-for-pickup order in the portal.
 7. Refresh assignments and open the assigned delivery.
 8. Verify pickup address, seller/distributor, delivery address, items, and contact data shown for the assignment.
-9. Accept the assignment, start pickup/out-for-delivery steps, and verify the status in both the farmer app and portal after each transition.
-10. Complete delivery using the one-time mock delivery OTP shown to the authorised operations flow in mock mode.
-11. Test one controlled failure path on a separate order, such as customer unavailable, and record the retry state.
-12. Test a return pickup only when the portal has created an eligible return assignment.
-13. Confirm completed delivery earnings/payout data is separated from promoter commission.
+9. Accept the assignment.
+10. Ask the operations tester to press **Issue pickup code** in the portal, on the order's
+    "Pickup Code and Farmer OTP" panel, and to read the code out. The code is displayed once and
+    stored only as a hash, so it cannot be looked up later — it can only be reissued, which
+    invalidates the previous one.
+11. Enter that code under **Enter pickup code** (or scan the printed label) and confirm pickup
+    verification succeeds. Only then can the portal mark the order out for delivery.
+12. Start the out-for-delivery step and verify the status in both the farmer app and portal after
+    each transition.
+13. Complete delivery using the one-time mock delivery OTP, which the same portal panel shows to
+    the authorised operations flow while SMS is mocked.
+14. Test one controlled failure path on a separate order, such as customer unavailable, and record
+    the retry state.
+15. Test a return pickup only when the portal has created an eligible return assignment.
+16. Confirm completed delivery earnings/payout data is separated from promoter commission.
 
-Never paste delivery OTPs into the defect report. Record only whether the OTP flow passed or failed.
+Never paste delivery OTPs or pickup codes into the defect report. Record only whether the flow
+passed or failed.
 
 ## 7. Business portal
 
@@ -295,11 +306,15 @@ Using `operations@example.local`:
 5. Move the child order to ready for pickup.
 6. Assign it to the seeded online delivery partner.
 7. Record the one-time mock delivery OTP securely for the immediate internal test, then discard it.
-8. Follow the status changes from the partner app.
-9. Confirm every transition records actor, timestamp, and reason where required.
-10. After delivery, confirm invoice/finance/commission effects appear only at the correct lifecycle point.
-11. Process the `[INTERNAL TEST]` support ticket and confirm the farmer sees the reply.
-12. Test a return/dispute only on a dedicated test order and do not delete the resulting history.
+   The "Pickup Code and Farmer OTP" panel on the order shows it; it clears itself after a few
+   minutes.
+8. Once the partner has accepted, press **Issue pickup code** on the same panel and read the code
+   to them. It cannot be looked up afterwards, only reissued.
+9. Follow the status changes from the partner app.
+10. Confirm every transition records actor, timestamp, and reason where required.
+11. After delivery, confirm invoice/finance/commission effects appear only at the correct lifecycle point.
+12. Process the `[INTERNAL TEST]` support ticket and confirm the farmer sees the reply.
+13. Test a return/dispute only on a dedicated test order and do not delete the resulting history.
 
 ### 7.6 Finance manager
 
@@ -324,11 +339,13 @@ Use this scenario after each platform passes its individual smoke test.
 | 3 | Business portal / Operations | Find the order and confirm seller, items, totals, address, and attribution | Order screenshot |
 | 4 | Business portal / Distributor | Confirm/reserve stock and prepare fulfilment using available actions | Status and batch/warehouse |
 | 5 | Business portal / Operations | Move to ready for pickup and assign the seeded delivery partner | Assignment ID; never record OTP |
-| 6 | Partner app / Delivery | Accept, pick up, start delivery, and complete with the immediate mock OTP | Status screenshots |
-| 7 | Farmer app | Refresh and confirm delivered state and invoice access | Delivered order screenshot |
-| 8 | Business portal / Finance | Verify separate ledger/commission/payout effects | Record IDs and amounts, no secrets |
-| 9 | Farmer app and portal | Create and answer an `[INTERNAL TEST]` support ticket | Ticket number |
-| 10 | Business portal / Admin | Review audit records for the workflow | Audit event IDs |
+| 6 | Partner app / Delivery | Accept the assignment | Assignment status screenshot |
+| 7 | Business portal / Operations | Issue the pickup code and read it to the partner | That a code was issued; never the code |
+| 8 | Partner app / Delivery | Verify pickup with that code, start delivery, and complete with the immediate mock OTP | Status screenshots |
+| 9 | Farmer app | Refresh and confirm delivered state and invoice access | Delivered order screenshot |
+| 10 | Business portal / Finance | Verify separate ledger/commission/payout effects | Record IDs and amounts, no secrets |
+| 11 | Farmer app and portal | Create and answer an `[INTERNAL TEST]` support ticket | Ticket number |
+| 12 | Business portal / Admin | Review audit records for the workflow | Audit event IDs |
 
 Pass only if the same order identity and consistent status are visible across all three platforms, permissions remain role-correct, and financial/seller data follows the business rules.
 

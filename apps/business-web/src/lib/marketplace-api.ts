@@ -1,6 +1,7 @@
 import 'server-only';
 import {
   ApiClientError,
+  createOpenApiClient,
   VardhnamApiClient,
   type AssignDeliveryInput,
   type AssignReturnPickupInput,
@@ -40,6 +41,7 @@ import {
   type InspectReturnRequestInput,
   type OnboardingOrganisation,
   type OnboardingQueueItem,
+  type DispatchPackageLabelResult,
   type DistributorOffer,
   type FulfilmentOrderDecisionInput,
   type FulfilmentOrderQuery,
@@ -47,6 +49,9 @@ import {
   type OfferQuery,
   type OfferQueueItem,
   type OfferStatusOperationInput,
+  type OpenApiClient,
+  type OpenApiComponents,
+  type OpenApiOperations,
   type PaginatedResult,
   type ProductDetail,
   type ProductOrder,
@@ -95,6 +100,7 @@ export type PortalResult<TData> =
 export async function createBusinessApiClient(): Promise<{
   config: PortalApiConfig;
   client?: VardhnamApiClient;
+  generatedClient?: OpenApiClient;
 }> {
   const baseUrl =
     readOptionalEnv('BUSINESS_WEB_API_BASE_URL') ??
@@ -120,6 +126,10 @@ export async function createBusinessApiClient(): Promise<{
       fetchOptions: {
         cache: 'no-store',
       },
+    }),
+    generatedClient: createOpenApiClient({
+      baseUrl,
+      getAccessToken: async () => accessToken,
     }),
   };
 }
@@ -1026,6 +1036,20 @@ export async function assignFulfilmentOrderDelivery(
   return client.assignFulfilmentOrderDelivery(orderId, input);
 }
 
+export async function issueDispatchPackageLabel(
+  orderId: string,
+  input: FulfilmentOrderDecisionInput,
+): Promise<DispatchPackageLabelResult> {
+  const { client, config } = await createBusinessApiClient();
+  if (!client) {
+    throw new Error(
+      `Set ${config.missingVariables.join(', ')} to enable authenticated server-side API calls.`,
+    );
+  }
+
+  return client.issueDispatchPackageLabel(orderId, input);
+}
+
 export async function markFulfilmentOrderOutForDelivery(
   orderId: string,
   input: FulfilmentOrderDecisionInput,
@@ -1217,34 +1241,16 @@ export interface CreateCommissionRuleInput {
   reason: string;
 }
 
-export interface SupportTicket {
-  id: string;
-  raisedByUserId: string;
-  raisedByRole: string;
-  raiserOrganisationId: string | null;
-  productOrderId: string | null;
-  category: string;
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  subject: string;
-  description: string;
-  status:
-    | 'OPEN'
-    | 'ASSIGNED'
-    | 'WAITING_FOR_CUSTOMER'
-    | 'WAITING_FOR_SELLER'
-    | 'ESCALATED'
-    | 'RESOLVED'
-    | 'CLOSED'
-    | 'REOPENED';
-  assignedToUserId: string | null;
-  assignedAt: string | null;
-  slaDueAt: string;
-  resolutionNote: string | null;
-  resolvedAt: string | null;
-  closedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+export type SupportTicket = OpenApiComponents['schemas']['SupportTicketResponseDto'];
+export type SupportTicketQuery = NonNullable<
+  OpenApiOperations['SupportController_listTickets']['parameters']['query']
+>;
+type AssignSupportTicketInput =
+  OpenApiOperations['SupportController_assignTicket']['requestBody']['content']['application/json'];
+type MarkSupportTicketWaitingInput =
+  OpenApiOperations['SupportController_markWaiting']['requestBody']['content']['application/json'];
+type ResolveSupportTicketInput =
+  OpenApiOperations['SupportController_resolveTicket']['requestBody']['content']['application/json'];
 
 export async function loadCommissionRules(
   query: Record<string, string>,
@@ -1360,14 +1366,23 @@ export async function createSettlement(sellerOrganisationId: string): Promise<Se
 }
 
 export async function loadSupportTickets(
-  query: Record<string, string>,
+  query: SupportTicketQuery,
 ): Promise<PortalResult<PaginatedResult<SupportTicket>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<SupportTicket>>(`support/tickets?${params}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/support/tickets', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load support tickets',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1376,11 +1391,17 @@ export async function loadSupportTickets(
 export async function loadSupportTicketDetail(
   ticketId: string,
 ): Promise<PortalResult<SupportTicket>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<SupportTicket>(`support/tickets/${ticketId}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/support/tickets/{ticketId}', {
+      params: { path: { ticketId } },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load support ticket');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1388,21 +1409,33 @@ export async function loadSupportTicketDetail(
 
 export async function assignTicket(
   id: string,
-  body: { assignedToUserId: string; reason?: string },
+  body: AssignSupportTicketInput,
 ): Promise<SupportTicket> {
-  return directApiFetch<SupportTicket>(`support/tickets/${id}/assign`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/support/tickets/{ticketId}/assign', {
+    params: { path: { ticketId: id } },
+    body,
+    cache: 'no-store',
   });
+  return supportTicketMutationData(result, 'Unable to assign support ticket');
 }
 export async function markTicketWaiting(
   id: string,
-  body: { status: 'WAITING_FOR_CUSTOMER' | 'WAITING_FOR_SELLER'; reason?: string },
+  body: MarkSupportTicketWaitingInput,
 ): Promise<SupportTicket> {
-  return directApiFetch<SupportTicket>(`support/tickets/${id}/mark-waiting`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/support/tickets/{ticketId}/mark-waiting', {
+    params: { path: { ticketId: id } },
+    body,
+    cache: 'no-store',
   });
+  return supportTicketMutationData(result, 'Unable to mark support ticket waiting');
 }
 export async function resumeTicket(id: string, reason?: string): Promise<SupportTicket> {
   return supportTicketAction(id, 'resume', reason);
@@ -1411,10 +1444,17 @@ export async function escalateTicket(id: string, reason?: string): Promise<Suppo
   return supportTicketAction(id, 'escalate', reason);
 }
 export async function resolveTicket(id: string, resolutionNote: string): Promise<SupportTicket> {
-  return directApiFetch<SupportTicket>(`support/tickets/${id}/resolve`, {
-    method: 'POST',
-    body: JSON.stringify({ resolutionNote }),
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const body: ResolveSupportTicketInput = { resolutionNote };
+  const result = await generatedClient.POST('/api/v1/support/tickets/{ticketId}/resolve', {
+    params: { path: { ticketId: id } },
+    body,
+    cache: 'no-store',
   });
+  return supportTicketMutationData(result, 'Unable to resolve support ticket');
 }
 export async function closeTicket(id: string, reason?: string): Promise<SupportTicket> {
   return supportTicketAction(id, 'close', reason);
@@ -1428,82 +1468,122 @@ async function supportTicketAction(
   action: 'resume' | 'escalate' | 'close' | 'reopen',
   reason?: string,
 ): Promise<SupportTicket> {
-  return directApiFetch<SupportTicket>(`support/tickets/${id}/${action}`, {
-    method: 'POST',
-    body: JSON.stringify({ ...(reason ? { reason } : {}) }),
-  });
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const options = {
+    params: { path: { ticketId: id } },
+    body: { ...(reason ? { reason } : {}) },
+    cache: 'no-store' as const,
+  };
+  const result =
+    action === 'resume'
+      ? await generatedClient.POST('/api/v1/support/tickets/{ticketId}/resume', options)
+      : action === 'escalate'
+        ? await generatedClient.POST('/api/v1/support/tickets/{ticketId}/escalate', options)
+        : action === 'close'
+          ? await generatedClient.POST('/api/v1/support/tickets/{ticketId}/close', options)
+          : await generatedClient.POST('/api/v1/support/tickets/{ticketId}/reopen', options);
+  return supportTicketMutationData(result, `Unable to ${action} support ticket`);
 }
 
-export type DashboardScope = 'PLATFORM' | 'ORGANISATION' | 'SELF';
-
-export interface DashboardItem {
-  code: string;
-  label: string;
-  scope: DashboardScope;
-  count: number;
+function supportTicketMutationData(
+  result: {
+    data?: OpenApiComponents['schemas']['SupportTicketResponseEnvelopeDto'];
+    error?: unknown;
+    response: Response;
+  },
+  fallbackMessage: string,
+): SupportTicket {
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, fallbackMessage);
+  }
+  return result.data.data;
 }
 
-export async function loadDashboardSummary(): Promise<PortalResult<{ items: DashboardItem[] }>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+export type DashboardItem = OpenApiComponents['schemas']['DashboardItemResponseDto'];
+export type DashboardScope = DashboardItem['scope'];
+type DashboardSummary = OpenApiComponents['schemas']['DashboardSummaryDataResponseDto'];
+
+export async function loadDashboardSummary(): Promise<PortalResult<DashboardSummary>> {
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<{ items: DashboardItem[] }>('dashboards/summary');
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/dashboards/summary', {
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load dashboard summary',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
 }
 
 /** Used only by the CSV export route handler -- audited on the backend. */
-export async function exportDashboardSummary(): Promise<{ items: DashboardItem[] }> {
-  return directApiFetch<{ items: DashboardItem[] }>('dashboards/summary/export');
+export async function exportDashboardSummary(): Promise<DashboardSummary> {
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(
+      `Set ${config.missingVariables.join(', ')} to enable authenticated server-side API calls.`,
+    );
+  }
+  const result = await generatedClient.GET('/api/v1/dashboards/summary/export', {
+    cache: 'no-store',
+  });
+  if (!result.data) {
+    throw generatedApiClientError(
+      result.error,
+      result.response,
+      'Unable to export dashboard summary',
+    );
+  }
+  return result.data.data;
 }
 
 // ---------------------------------------------------------------------------
 // Payouts (WP-09r)
 // ---------------------------------------------------------------------------
 
-export type PayoutAccountStatus = 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED';
-
-export interface PayoutAccount {
-  id: string;
-  userId: string;
-  accountHolderName: string;
-  bankName: string;
-  /** Backend-masked -- only the last four digits ever leave the API. */
-  accountNumber: string;
-  ifscCode: string;
-  upiId: string | null;
-  status: PayoutAccountStatus;
-  verifiedAt: string | null;
-  verifiedByUserId: string | null;
-  rejectionReason: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PayoutStatementTotal {
-  status: CommissionEntryStatus;
-  amountPaise: number;
-}
-
-export interface PayoutStatement {
-  items: CommissionEntry[];
-  page: number;
-  limit: number;
-  total: number;
-  totalsByStatus: PayoutStatementTotal[];
-}
+export type PayoutAccount = OpenApiComponents['schemas']['PayoutAccountResponseDto'];
+export type PayoutAccountStatus = PayoutAccount['status'];
+export type PayoutStatement = OpenApiComponents['schemas']['PayoutStatementDataResponseDto'];
+export type PayoutStatementTotal = OpenApiComponents['schemas']['PayoutStatementTotalResponseDto'];
+export type PayoutAccountQuery = NonNullable<
+  OpenApiOperations['PayoutsController_listAccounts']['parameters']['query']
+>;
+export type PayoutStatementQuery = NonNullable<
+  OpenApiOperations['PayoutsController_getMyStatement']['parameters']['query']
+>;
+type VerifyPayoutAccountInput =
+  OpenApiOperations['PayoutsController_verifyAccount']['requestBody']['content']['application/json'];
+type UpsertPayoutAccountInput =
+  OpenApiOperations['PayoutsController_upsertMyAccount']['requestBody']['content']['application/json'];
 
 export async function loadPayoutAccounts(
-  query: Record<string, string>,
+  query: PayoutAccountQuery,
 ): Promise<PortalResult<PaginatedResult<PayoutAccount>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<PayoutAccount>>(`payouts/accounts?${params}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/payouts/accounts', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load payout accounts',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1512,11 +1592,17 @@ export async function loadPayoutAccounts(
 export async function loadPayoutAccountByUserId(
   userId: string,
 ): Promise<PortalResult<PayoutAccount>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<PayoutAccount>(`payouts/accounts/${userId}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/payouts/accounts/{userId}', {
+      params: { path: { userId } },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load payout account');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1524,12 +1610,21 @@ export async function loadPayoutAccountByUserId(
 
 export async function verifyPayoutAccount(
   accountId: string,
-  body: { status: 'VERIFIED' | 'REJECTED'; reason?: string },
+  body: VerifyPayoutAccountInput,
 ): Promise<PayoutAccount> {
-  return directApiFetch<PayoutAccount>(`payouts/accounts/${accountId}/verify`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/payouts/accounts/{accountId}/verify', {
+    params: { path: { accountId } },
+    body,
+    cache: 'no-store',
   });
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, 'Unable to verify payout account');
+  }
+  return result.data.data;
 }
 
 /**
@@ -1538,11 +1633,16 @@ export async function verifyPayoutAccount(
  * first-time submission form instead of an error banner.
  */
 export async function loadMyPayoutAccount(): Promise<PortalResult<PayoutAccount | null>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<PayoutAccount>('payouts/accounts/me');
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/payouts/accounts/me', {
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load payout account');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     if (formatApiError(error).toLowerCase().includes('not found')) {
       return { ok: true, config, data: null };
@@ -1551,28 +1651,41 @@ export async function loadMyPayoutAccount(): Promise<PortalResult<PayoutAccount 
   }
 }
 
-export async function upsertMyPayoutAccount(body: {
-  accountHolderName: string;
-  bankName: string;
-  accountNumber: string;
-  ifscCode: string;
-  upiId?: string;
-}): Promise<PayoutAccount> {
-  return directApiFetch<PayoutAccount>('payouts/accounts/me', {
-    method: 'PUT',
-    body: JSON.stringify(body),
+export async function upsertMyPayoutAccount(
+  body: UpsertPayoutAccountInput,
+): Promise<PayoutAccount> {
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.PUT('/api/v1/payouts/accounts/me', {
+    body,
+    cache: 'no-store',
   });
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, 'Unable to update payout account');
+  }
+  return result.data.data;
 }
 
 export async function loadMyPayoutStatement(
-  query: Record<string, string>,
+  query: PayoutStatementQuery,
 ): Promise<PortalResult<PayoutStatement>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PayoutStatement>(`payouts/statements/me?${params}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/payouts/statements/me', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load payout statement',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1582,40 +1695,27 @@ export async function loadMyPayoutStatement(
 // Notifications (WP-09r)
 // ---------------------------------------------------------------------------
 
-export type NotificationChannel = 'PUSH' | 'SMS' | 'WHATSAPP' | 'EMAIL' | 'IN_APP';
-export type NotificationDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
-
-export interface PortalNotification {
-  id: string;
-  recipientUserId: string;
-  channel: NotificationChannel;
-  category: string;
-  title: string;
-  body: string;
-  status: NotificationDeliveryStatus;
-  attemptCount: number;
-  lastAttemptAt: string | null;
-  lastErrorCode: string | null;
-  lastErrorMessage: string | null;
-  providerReferenceId: string | null;
-  readAt: string | null;
-  relatedResourceType: string | null;
-  relatedResourceId: string | null;
-  reason: string | null;
-  createdAt: string;
-}
+export type PortalNotification = OpenApiComponents['schemas']['NotificationResponseDto'];
+export type NotificationChannel = PortalNotification['channel'];
+export type NotificationDeliveryStatus = PortalNotification['status'];
+export type NotificationQuery = NonNullable<
+  OpenApiOperations['NotificationsController_listNotifications']['parameters']['query']
+>;
 
 export async function loadNotifications(
-  query: Record<string, string>,
+  query: NotificationQuery,
 ): Promise<PortalResult<PaginatedResult<PortalNotification>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<PortalNotification>>(
-      `notifications?${params}`,
-    );
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/notifications', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load notifications');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1624,96 +1724,91 @@ export async function loadNotifications(
 export async function dispatchNotification(
   id: string,
 ): Promise<{ notificationId: string; queued: boolean }> {
-  return directApiFetch<{ notificationId: string; queued: boolean }>(
-    `notifications/${id}/dispatch`,
-    { method: 'POST' },
-  );
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/notifications/{id}/dispatch', {
+    params: { path: { id } },
+    cache: 'no-store',
+  });
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, 'Unable to dispatch notification');
+  }
+  return result.data.data;
 }
 
 // ---------------------------------------------------------------------------
 // Tally (WP-09r)
 // ---------------------------------------------------------------------------
 
-export type TallySyncRecordType =
-  | 'PARTY_MASTER'
-  | 'ITEM_MASTER'
-  | 'INVOICE'
-  | 'SETTLEMENT'
-  | 'COMMISSION_INVOICE'
-  | 'CREDIT_NOTE'
-  | 'RECEIPT'
-  | 'VOUCHER';
-export type TallySyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
-
-export interface TallySyncAttempt {
-  id: string;
-  attemptNumber: number;
-  outcome: TallySyncStatus;
-  errorCode: string | null;
-  errorMessage: string | null;
-  performedByUserId: string | null;
-  createdAt: string;
-}
-
-export interface TallySyncRecord {
-  id: string;
-  recordType: TallySyncRecordType;
-  sourceEntityId: string | null;
-  referenceLabelSnapshot: string;
-  referenceNumberSnapshot: string | null;
-  amountPaise: number | null;
-  status: TallySyncStatus;
-  attemptCount: number;
-  lastAttemptAt: string | null;
-  lastErrorCode: string | null;
-  lastErrorMessage: string | null;
-  tallyReferenceId: string | null;
-  reason: string | null;
-  attempts?: TallySyncAttempt[];
-  createdAt: string;
-}
-
-export interface TallyReconciliationRow {
-  recordType: TallySyncRecordType;
-  status: TallySyncStatus;
-  count: number;
-  totalAmountPaise: number;
-  oldestUnsyncedAgeHours: number | null;
-}
+export type TallySyncRecord = OpenApiComponents['schemas']['TallySyncRecordResponseDto'];
+export type TallySyncRecordDetail =
+  OpenApiComponents['schemas']['TallySyncRecordDetailResponseDto'];
+export type TallySyncAttempt = OpenApiComponents['schemas']['TallySyncAttemptResponseDto'];
+export type TallyReconciliationRow =
+  OpenApiComponents['schemas']['TallyReconciliationRowResponseDto'];
+export type TallySyncRecordType = TallySyncRecord['recordType'];
+export type TallySyncStatus = TallySyncRecord['status'];
+export type TallySyncQuery = NonNullable<
+  OpenApiOperations['TallyController_listSyncRecords']['parameters']['query']
+>;
+export type TallySyncAttemptInput =
+  OpenApiOperations['TallyController_attemptSync']['requestBody']['content']['application/json'];
 
 export async function loadTallySyncRecords(
-  query: Record<string, string>,
+  query: TallySyncQuery,
 ): Promise<PortalResult<PaginatedResult<TallySyncRecord>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<TallySyncRecord>>(
-      `tally/sync-records?${params}`,
-    );
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/tally/sync-records', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load Tally records');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
 }
 
-export async function loadTallySyncRecord(id: string): Promise<PortalResult<TallySyncRecord>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+export async function loadTallySyncRecord(
+  id: string,
+): Promise<PortalResult<TallySyncRecordDetail>> {
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<TallySyncRecord>(`tally/sync-records/${id}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/tally/sync-records/{id}', {
+      params: { path: { id } },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load Tally record');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
 }
 
 export async function loadTallyReconciliation(): Promise<PortalResult<TallyReconciliationRow[]>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<TallyReconciliationRow[]>('tally/reconciliation');
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/tally/reconciliation', {
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load Tally reconciliation',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1721,40 +1816,32 @@ export async function loadTallyReconciliation(): Promise<PortalResult<TallyRecon
 
 export async function attemptTallySync(
   id: string,
-  body: {
-    outcome: TallySyncStatus;
-    tallyReferenceId?: string;
-    errorCode?: string;
-    errorMessage?: string;
-    reason?: string;
-  },
+  body: TallySyncAttemptInput,
 ): Promise<TallySyncRecord> {
-  return directApiFetch<TallySyncRecord>(`tally/sync-records/${id}/attempt`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/tally/sync-records/{id}/attempt', {
+    params: { path: { id } },
+    body,
+    cache: 'no-store',
   });
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, 'Unable to record Tally attempt');
+  }
+  return result.data.data;
 }
 
 // ---------------------------------------------------------------------------
 // Organisations and memberships (WP-09r)
 // ---------------------------------------------------------------------------
 
-export interface PortalOrganisation {
-  id: string;
-  type: string;
-  slug: string;
-  legalName: string;
-  displayName: string;
-  gstin: string | null;
-  registeredStateCode: string | null;
-  status: OrganisationDirectoryStatus;
-  reviewedAt: string | null;
-  reviewReason: string | null;
-  createdAt: string;
-}
-
-export type OrganisationDirectoryStatus =
-  'PENDING_VERIFICATION' | 'ACTIVE' | 'REJECTED' | 'SUSPENDED';
+export type PortalOrganisation = OpenApiComponents['schemas']['OrganisationResponseDto'];
+export type OrganisationDirectoryStatus = PortalOrganisation['status'];
+export type OrganisationQuery = NonNullable<
+  OpenApiOperations['OrganisationsController_list']['parameters']['query']
+>;
 
 export interface PortalMembership {
   id: string;
@@ -1771,21 +1858,23 @@ export interface PortalMembership {
   };
 }
 
-export interface PortalOrganisationDetail extends PortalOrganisation {
-  memberships: PortalMembership[];
-}
+export type PortalOrganisationDetail =
+  OpenApiComponents['schemas']['OrganisationDetailResponseDto'];
 
 export async function loadOrganisations(
-  query: Record<string, string>,
+  query: OrganisationQuery,
 ): Promise<PortalResult<PaginatedResult<PortalOrganisation>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<PortalOrganisation>>(
-      `organisations?${params}`,
-    );
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/organisations', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load organisations');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1794,11 +1883,17 @@ export async function loadOrganisations(
 export async function loadOrganisation(
   organisationId: string,
 ): Promise<PortalResult<PortalOrganisationDetail>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<PortalOrganisationDetail>(`organisations/${organisationId}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/organisations/{organisationId}', {
+      params: { path: { organisationId } },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load organisation');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -1845,41 +1940,44 @@ export async function updateMembership(
 // Users (WP-09r)
 // ---------------------------------------------------------------------------
 
-export type PortalUserStatus = 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
-
-export interface PortalUser {
-  id: string;
-  email: string | null;
-  phone: string | null;
-  status: PortalUserStatus;
-  profile: { displayName: string; preferredLocale: string; timezone: string } | null;
-  createdAt: string;
-}
-
-export interface PortalUserDetail extends PortalUser {
-  memberships: Array<PortalMembership & { organisation: PortalOrganisation }>;
-}
+export type PortalUser = OpenApiComponents['schemas']['UserResponseDto'];
+export type PortalUserDetail = PortalUser;
+export type PortalUserStatus = PortalUser['status'];
+export type UserQuery = NonNullable<
+  OpenApiOperations['UsersController_list']['parameters']['query']
+>;
 
 export async function loadUsers(
-  query: Record<string, string>,
+  query: UserQuery,
 ): Promise<PortalResult<PaginatedResult<PortalUser>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<PortalUser>>(`users?${params}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/users', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load users');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
 }
 
 export async function loadUser(userId: string): Promise<PortalResult<PortalUserDetail>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<PortalUserDetail>(`users/${userId}`);
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/users/{userId}', {
+      params: { path: { userId } },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(result.error, result.response, 'Unable to load user');
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -2041,58 +2139,63 @@ export async function closeDispute(disputeId: string, note: string): Promise<Dis
 // Admin jobs (WP-09r)
 // ---------------------------------------------------------------------------
 
-export interface QueueDepth {
-  queue: string;
-  waiting: number;
-  active: number;
-  completed: number;
-  failed: number;
-  delayed: number;
-  deadLetter: number;
-}
+export type QueueDepth = OpenApiComponents['schemas']['QueueDepthResponseDto'];
+export type ScheduledJobDefinition =
+  OpenApiComponents['schemas']['ScheduledJobDefinitionResponseDto'];
+export type DeadLetterEntry = OpenApiComponents['schemas']['DeadLetterEntryResponseDto'];
+export type AdminJobQueue =
+  OpenApiOperations['AdminJobsController_listDeadLetterJobs']['parameters']['query']['queue'];
+export type DeadLetterQuery =
+  OpenApiOperations['AdminJobsController_listDeadLetterJobs']['parameters']['query'];
 
-export interface ScheduledJobDefinition {
-  jobName: string;
-  pattern: string;
-  description: string;
-}
+const adminJobQueues: readonly AdminJobQueue[] = [
+  'notifications',
+  'payment-webhooks',
+  'tally-sync',
+  'documents',
+  'scheduled-maintenance',
+];
 
-export interface DeadLetterEntry {
-  id: string;
-  originalQueue: string;
-  originalJobName: string;
-  failedReason: string;
-  attemptsMade: number;
-  failedAt: string;
+export function isAdminJobQueue(value: string): value is AdminJobQueue {
+  return adminJobQueues.some((queue) => queue === value);
 }
 
 export async function loadQueues(): Promise<
   PortalResult<{ queues: QueueDepth[]; scheduledJobs: ScheduledJobDefinition[] }>
 > {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const data = await directApiFetch<{
-      queues: QueueDepth[];
-      scheduledJobs: ScheduledJobDefinition[];
-    }>('admin/jobs/queues');
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/admin/jobs/queues', {
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw new ApiClientError('Unable to load job queues', result.response.status);
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
 }
 
 export async function loadDeadLetterJobs(
-  query: Record<string, string>,
+  query: DeadLetterQuery,
 ): Promise<PortalResult<PaginatedResult<DeadLetterEntry>>> {
-  const { config } = await createBusinessApiClient();
-  if (!config.configured) return missingConfigResult(config);
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) return missingConfigResult(config);
   try {
-    const params = new URLSearchParams(query);
-    const data = await directApiFetch<PaginatedResult<DeadLetterEntry>>(
-      `admin/jobs/dead-letter?${params}`,
-    );
-    return { ok: true, config, data };
+    const result = await generatedClient.GET('/api/v1/admin/jobs/dead-letter', {
+      params: { query },
+      cache: 'no-store',
+    });
+    if (!result.data) {
+      throw generatedApiClientError(
+        result.error,
+        result.response,
+        'Unable to load dead-letter jobs',
+      );
+    }
+    return { ok: true, config, data: result.data.data };
   } catch (error) {
     return { ok: false, config, error: formatApiError(error) };
   }
@@ -2102,10 +2205,34 @@ export async function retryDeadLetterJob(
   jobId: string,
   body: { queue: string; reason?: string },
 ): Promise<{ queue: string; deadLetterJobId: string; replayJobId: string }> {
-  return directApiFetch<{ queue: string; deadLetterJobId: string; replayJobId: string }>(
-    `admin/jobs/dead-letter/${encodeURIComponent(jobId)}/retry`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
+  if (!isAdminJobQueue(body.queue)) {
+    throw new ApiClientError('Invalid background-job queue', 400, 'VALIDATION_ERROR');
+  }
+  const { config, generatedClient } = await createBusinessApiClient();
+  if (!generatedClient) {
+    throw new Error(`Set ${config.missingVariables.join(', ')} to enable API calls.`);
+  }
+  const result = await generatedClient.POST('/api/v1/admin/jobs/dead-letter/{jobId}/retry', {
+    params: { path: { jobId } },
+    body: { ...body, queue: body.queue },
+    cache: 'no-store',
+  });
+  if (!result.data) {
+    throw generatedApiClientError(result.error, result.response, 'Unable to retry dead-letter job');
+  }
+  return result.data.data;
+}
+
+function generatedApiClientError(
+  payload: unknown,
+  response: Response,
+  fallbackMessage: string,
+): ApiClientError {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
+  const message = error && typeof error.message === 'string' ? error.message : fallbackMessage;
+  const code = error && typeof error.code === 'string' ? error.code : undefined;
+  const requestId = error && typeof error.requestId === 'string' ? error.requestId : undefined;
+  return new ApiClientError(message, response.status, code, requestId);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -15,6 +15,7 @@ import {
   downloadFulfilmentInvoicePdf,
   formatApiError,
   generateProductInvoice,
+  issueDispatchPackageLabel,
   markFulfilmentOrderOutForDelivery,
   markFulfilmentOrderReadyToPack,
   markFulfilmentOrderReadyForPickup,
@@ -23,6 +24,7 @@ import {
   rejectFulfilmentOrder,
 } from '../../lib/marketplace-api';
 import { requireHttpDownloadUrl } from '../../lib/document-download';
+import { writeOrderHandoffCredentials } from '../../lib/order-handoff';
 
 export async function acceptOrderAction(formData: FormData): Promise<void> {
   const orderId = requireFormValue(formData, 'orderId');
@@ -154,12 +156,32 @@ export async function assignDeliveryAction(formData: FormData): Promise<void> {
   try {
     const result = await assignFulfilmentOrderDelivery(orderId, input);
     revalidateOrderPaths(orderId);
+    // The farmer OTP is returned once and stored only as a hash. It goes to the
+    // handoff panel instead of a banner the tester loses on the next click.
     const mockOtpCode = result.deliveryAssignment?.mockOtpCode;
-    redirectWithOrderMessage(
-      orderId,
-      'notice',
-      mockOtpCode ? `Delivery assigned. Mock OTP: ${mockOtpCode}` : 'Delivery assigned',
-    );
+    if (mockOtpCode) {
+      await writeOrderHandoffCredentials(orderId, { deliveryOtp: mockOtpCode });
+    }
+    redirectWithOrderMessage(orderId, 'notice', 'Delivery assigned');
+  } catch (error) {
+    redirectWithOrderMessage(orderId, 'error', formatApiError(error));
+  }
+}
+
+export async function issuePickupCodeAction(formData: FormData): Promise<void> {
+  const orderId = requireFormValue(formData, 'orderId');
+  const reason = optionalFormValue(formData, 'reason');
+  const input: FulfilmentOrderDecisionInput = {
+    ...(reason ? { reason } : {}),
+  };
+
+  try {
+    const result = await issueDispatchPackageLabel(orderId, input);
+    revalidateOrderPaths(orderId);
+    // Only the hash of this code is persisted, so this response is the single
+    // opportunity to show it. Reissuing is allowed until pickup is verified.
+    await writeOrderHandoffCredentials(orderId, { pickupCode: result.packageQrCode });
+    redirectWithOrderMessage(orderId, 'notice', 'Pickup code issued');
   } catch (error) {
     redirectWithOrderMessage(orderId, 'error', formatApiError(error));
   }

@@ -1,19 +1,3 @@
-:root {
-  --field-green: #2f6b3f;
-  --soil: #6b4e32;
-  --harvest: #d9a441;
-  --sky: #277da1;
-  --ink: #1f2933;
-  --muted: #697586;
-  --line: #d8dfd3;
-  --surface: #ffffff;
-  --background: #f6f7f2;
-  --danger: #b42318;
-  --warning: #b54708;
-  --success: #027a48;
-  --focus: #1d4ed8;
-}
-
 .inspectionForm {
   display: grid;
   gap: 16px;
@@ -70,13 +54,7 @@ body {
 body {
   background: var(--background);
   color: var(--ink);
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
+  font-family: var(--font-family);
 }
 
 a {
@@ -88,6 +66,23 @@ a {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   min-height: 100vh;
+}
+
+.skipLink {
+  position: fixed;
+  z-index: 100;
+  top: 10px;
+  left: 10px;
+  transform: translateY(-160%);
+  border-radius: 8px;
+  background: var(--ink);
+  color: #ffffff;
+  padding: 10px 14px;
+  font-weight: 750;
+}
+
+.skipLink:focus {
+  transform: translateY(0);
 }
 
 .sidebar {
@@ -158,22 +153,51 @@ h4 {
 
 .navList {
   display: grid;
+  align-content: start;
+  gap: 20px;
+}
+
+.navGroup,
+.navGroupLinks {
+  display: grid;
+}
+
+.navGroup {
   gap: 6px;
 }
 
-.navList a {
+.navGroupLinks {
+  gap: 4px;
+}
+
+.navGroupLabel {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.navGroupLinks a {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--muted);
   font-weight: 650;
 }
 
-.navList a.active,
-.navList a:hover,
-.navList a:focus-visible {
+.navGroupLinks a.active,
+.navGroupLinks a:hover,
+.navGroupLinks a:focus-visible {
   background: #edf4ea;
   color: var(--field-green);
   outline: none;
+}
+
+.navToggle,
+.navToggleLabel {
+  display: none;
 }
 
 .workspace {
@@ -588,6 +612,27 @@ textarea:focus-visible {
   padding: 14px;
 }
 
+/* One-time credentials -- pickup code, delivery OTP -- that a tester has to
+   read off the screen and retype into a partner handset. */
+.handoffCredential {
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  background: #fffcf5;
+  margin: 12px 0;
+  padding: 12px 14px;
+}
+
+.handoffCode {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: all;
+}
+
 @media (max-width: 960px) {
   .shell {
     grid-template-columns: 1fr;
@@ -598,8 +643,52 @@ textarea:focus-visible {
     border-bottom: 1px solid var(--line);
   }
 
+  .brandBlock {
+    margin-bottom: 16px;
+  }
+
+  .navToggle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .navToggleLabel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--field-green);
+    cursor: pointer;
+    font-weight: 750;
+  }
+
+  .navToggleLabel span:first-child {
+    font-size: 0;
+  }
+
+  .navToggleLabel span:first-child::after {
+    content: 'Navigation';
+    font-size: 14px;
+  }
+
+  .navToggle:focus-visible + .navToggleLabel {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
   .navList {
+    display: none;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 16px;
+  }
+
+  .navToggle:checked + .navToggleLabel + .navList {
+    display: grid;
   }
 
   .dashboardGrid,
@@ -738,7 +827,7 @@ textarea:focus-visible {
   display: grid;
   place-items: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #f6f7f2 0%, #edf4ea 50%, #e8efe5 100%);
+  background: linear-gradient(135deg, var(--background) 0%, #edf4ea 50%, #e8efe5 100%);
 }
 
 .loginContainer {
