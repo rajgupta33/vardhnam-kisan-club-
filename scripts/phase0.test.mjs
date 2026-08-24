@@ -157,7 +157,9 @@ test('Phase 1B onboarding files define approval-ready profile and KYC foundation
 });
 
 test('Phase 1C portal files connect onboarding review and audit surfaces', () => {
-  const homePage = readFileSync('apps/business-web/src/app/page.tsx', 'utf8');
+  // The onboarding queue moved off the portal home when `/` became the
+  // role-aware dashboard; it now lives on its own route.
+  const queuePage = readFileSync('apps/business-web/src/app/onboarding/page.tsx', 'utf8');
   const detailPage = readFileSync(
     'apps/business-web/src/app/onboarding/[organisationId]/page.tsx',
     'utf8',
@@ -169,7 +171,7 @@ test('Phase 1C portal files connect onboarding review and audit surfaces', () =>
     'utf8',
   );
 
-  assert.match(homePage, /loadApprovalQueue/);
+  assert.match(queuePage, /loadApprovalQueue/);
   assert.match(detailPage, /reviewKycDocumentAction/);
   assert.match(auditPage, /loadAuditLogs/);
   assert.match(client, /listOnboardingApprovalQueue/);
@@ -294,7 +296,7 @@ test('Phase 2D marketplace files define farmer-safe discovery foundations', () =
     'apps/farmer-mobile/lib/src/marketplace/marketplace_api.dart',
     'utf8',
   );
-  const farmerStrings = readFileSync('apps/farmer-mobile/lib/src/strings/app_strings.dart', 'utf8');
+  const farmerStrings = readFileSync('apps/farmer-mobile/lib/l10n/app_en.arb', 'utf8');
   const apiDocs = readFileSync('docs/API_CONTRACTS.md', 'utf8');
   const integration = readFileSync(
     'apps/marketplace-api/test/integration/phase2d-marketplace.spec.ts',
@@ -313,8 +315,8 @@ test('Phase 2D marketplace files define farmer-safe discovery foundations', () =
   assert.match(farmerBrowse, /ProductBrowseScreen/);
   assert.match(farmerBrowse, /_loadProducts/);
   assert.match(farmerBrowse, /discoveryPreviewLabel/);
-  assert.match(farmerStrings, /Browse products/);
-  assert.match(farmerStrings, /Available products/);
+  assert.match(farmerStrings, /"browseTitle"/);
+  assert.match(farmerStrings, /"enterValidPincode"/);
   assert.match(apiDocs, /Phase 2D Marketplace Discovery Endpoints/);
   assert.match(integration, /marketplace\/products/);
 });
@@ -423,7 +425,7 @@ test('Phase 3B checkout files define order orchestration and reservation foundat
     'apps/farmer-mobile/lib/src/screens/checkout_review_screen.dart',
     'utf8',
   );
-  const farmerStrings = readFileSync('apps/farmer-mobile/lib/src/strings/app_strings.dart', 'utf8');
+  const farmerStrings = readFileSync('apps/farmer-mobile/lib/l10n/app_en.arb', 'utf8');
   const client = readFileSync('packages/api-client/src/index.ts', 'utf8');
   const apiDocs = readFileSync('docs/API_CONTRACTS.md', 'utf8');
   const integration = readFileSync(
@@ -470,11 +472,17 @@ test('Phase 3C mock payment files define backend-confirmed payment foundations',
     'apps/marketplace-api/src/payments/payments.controller.ts',
     'utf8',
   );
+  // Settlement outcomes moved out of `payments.service.ts` into their own
+  // service; the audit action names live there now.
+  const paymentSettlement = readFileSync(
+    'apps/marketplace-api/src/payments/payment-settlement.service.ts',
+    'utf8',
+  );
   const checkoutReview = readFileSync(
     'apps/farmer-mobile/lib/src/screens/checkout_review_screen.dart',
     'utf8',
   );
-  const farmerStrings = readFileSync('apps/farmer-mobile/lib/src/strings/app_strings.dart', 'utf8');
+  const farmerStrings = readFileSync('apps/farmer-mobile/lib/l10n/app_en.arb', 'utf8');
   const client = readFileSync('packages/api-client/src/index.ts', 'utf8');
   const apiDocs = readFileSync('docs/API_CONTRACTS.md', 'utf8');
   const integration = readFileSync(
@@ -490,10 +498,10 @@ test('Phase 3C mock payment files define backend-confirmed payment foundations',
   assert.match(permissions, /payments:confirm:own/);
   assert.match(appModule, /PaymentsModule/);
   assert.match(paymentsService, /Idempotency-Key header is required for mock payment actions/);
-  assert.match(paymentsService, /MOCK_PAYMENT_CONFIRMED/);
+  assert.match(paymentSettlement, /MOCK_PAYMENT_CONFIRMED/);
   assert.match(paymentsController, /payments\/mock-intents/);
-  assert.match(checkoutReview, /_MockPaymentPanel/);
-  assert.match(farmerStrings, /Mock payment/);
+  assert.match(checkoutReview, /_PaymentAndCancellationPanel/);
+  assert.match(farmerStrings, /"mockPaymentTitle"/);
   assert.match(client, /createMockPaymentIntent/);
   assert.match(client, /confirmMockPaymentIntent/);
   assert.match(apiDocs, /Phase 3C Mock Payment Endpoints/);
@@ -519,7 +527,7 @@ test('Phase 3D cancellation files define reservation release foundations', () =>
     'apps/farmer-mobile/lib/src/screens/checkout_review_screen.dart',
     'utf8',
   );
-  const farmerStrings = readFileSync('apps/farmer-mobile/lib/src/strings/app_strings.dart', 'utf8');
+  const farmerStrings = readFileSync('apps/farmer-mobile/lib/l10n/app_en.arb', 'utf8');
   const client = readFileSync('packages/api-client/src/index.ts', 'utf8');
   const apiDocs = readFileSync('docs/API_CONTRACTS.md', 'utf8');
   const businessRules = readFileSync('docs/BUSINESS_RULES.md', 'utf8');
@@ -535,8 +543,8 @@ test('Phase 3D cancellation files define reservation release foundations', () =>
   assert.match(checkoutService, /INVENTORY_RELEASED_FROM_ORDER/);
   assert.match(checkoutController, /:checkoutId\/cancel/);
   assert.match(ordersController, /:orderId\/cancel/);
-  assert.match(checkoutReview, /_CancellationPanel/);
-  assert.match(farmerStrings, /Cancel checkout/);
+  assert.match(checkoutReview, /_PaymentAndCancellationPanel/);
+  assert.match(farmerStrings, /"cancellationActionLabel"/);
   assert.match(client, /cancelMyCheckout/);
   assert.match(client, /cancelMyOrder/);
   assert.match(apiDocs, /Phase 3D Cancellation And Reservation Release Endpoints/);

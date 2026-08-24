@@ -3,7 +3,7 @@ name: Vardhnam CI
 on:
   push:
     branches:
-      - main
+      - master
   pull_request:
 
 jobs:
@@ -66,6 +66,12 @@ jobs:
 
       - name: Generate Prisma client
         run: npm run prisma:generate
+
+      - name: Check OpenAPI document drift
+        run: npm run check:openapi
+
+      - name: Check generated TypeScript API types
+        run: npm run check:api-client
 
       - name: Deploy migrations
         run: npm --workspace @vardhnam/marketplace-api run prisma:deploy
