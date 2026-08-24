@@ -1,1 +1,6 @@
 artifacts/*.apk filter=lfs diff=lfs merge=lfs -text
+
+# Generated and byte-compared: `openapi:check` regenerates this file and diffs it
+# against the committed copy, so a CRLF checkout on Windows reports drift that
+# does not exist. Pin it to LF on every platform.
+apps/marketplace-api/openapi.json text eol=lf

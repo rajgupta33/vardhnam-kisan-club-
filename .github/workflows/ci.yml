@@ -42,6 +42,9 @@ jobs:
       # The integration suite sets AUTH_MODE per Jest project, so this value only
       # affects any non-test process started by a step.
       AUTH_MODE: mock
+      # Required by the API's env schema, so any step that boots the Nest
+      # application -- the OpenAPI export, the integration suites -- needs it.
+      JWT_ACCESS_SECRET: ci-only-jwt-secret-value-not-for-real-use
       DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech_test?schema=public
       TEST_DATABASE_URL: postgresql://vardhnam:vardhnam_dev_password@localhost:5432/vardhnam_agrotech_test?schema=public
       REDIS_URL: redis://localhost:6379
