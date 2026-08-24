@@ -1,0 +1,27 @@
+# Golden files are raster images, and the host platform's font engine decides
+# how glyphs are anti-aliased. The same widget therefore produces different
+# bytes on Linux (FreeType) than on Windows or macOS, and `matchesGoldenFile`
+# compares bytes exactly.
+#
+# CI runs on ubuntu-latest, so Linux is the platform these goldens are generated
+# for and the only one they are authoritative on. Regenerate them with:
+#
+#   docker run --rm -v "$PWD/../..:/repo" -w /repo/apps/farmer-mobile \
+#     <a linux flutter image> flutter test --update-goldens test/golden
+#
+# Running them on another platform reports failures that say nothing about the
+# code, so they are skipped there rather than left to cry wolf. Every other test
+# in the suite still runs everywhere.
+tags:
+  golden:
+    # Declared so `flutter test -t golden` and `-x golden` are usable locally.
+
+on_os:
+  windows:
+    tags:
+      golden:
+        skip: "Goldens are generated on Linux; run them in CI or a Linux container."
+  mac-os:
+    tags:
+      golden:
+        skip: "Goldens are generated on Linux; run them in CI or a Linux container."
