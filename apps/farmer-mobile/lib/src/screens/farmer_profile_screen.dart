@@ -9,6 +9,7 @@ import '../app/theme/vardhnam_spacing.dart';
 import '../auth/auth_controller.dart';
 import '../core/widgets/vardhnam_components.dart';
 import '../localization/locale_controller.dart';
+import '../legal/farmer_legal_links.dart';
 import '../profile/farmer_profile.dart';
 import '../profile/farmer_profile_repository.dart';
 import '../presentation/farmer_loading_state.dart';
@@ -151,6 +152,28 @@ class _FarmerProfileScreenState extends ConsumerState<FarmerProfileScreen> {
     return trimmed.isEmpty ? null : trimmed;
   }
 
+  Future<void> _openLegalLink(Uri? uri) async {
+    final strings = AppLocalizations.of(context)!;
+    if (uri == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.legalLinkNotConfigured)));
+      return;
+    }
+
+    try {
+      final opened = await ref
+          .read(externalLegalLinkLauncherProvider)
+          .launch(uri);
+      if (opened || !mounted) return;
+    } on Object {
+      if (!mounted) return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(strings.legalLinkOpenFailed)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = AppLocalizations.of(context)!;
@@ -184,6 +207,7 @@ class _FarmerProfileScreenState extends ConsumerState<FarmerProfileScreen> {
     }
 
     final profile = _profile!;
+    final legalLinks = ref.watch(farmerLegalLinksProvider);
     return Form(
       key: _formKey,
       child: ListView(
@@ -265,6 +289,22 @@ class _FarmerProfileScreenState extends ConsumerState<FarmerProfileScreen> {
                   icon: Icons.notifications_outlined,
                   label: strings.notificationsTitle,
                   onTap: () => context.push(AppRoutes.notifications),
+                ),
+                _AccountRow(
+                  icon: Icons.privacy_tip_outlined,
+                  label: strings.privacyPolicyLabel,
+                  onTap: () => _openLegalLink(legalLinks.privacyPolicyUrl),
+                ),
+                _AccountRow(
+                  icon: Icons.description_outlined,
+                  label: strings.termsAndConditionsLabel,
+                  onTap: () => _openLegalLink(legalLinks.termsUrl),
+                ),
+                _AccountRow(
+                  icon: Icons.person_remove_outlined,
+                  label: strings.requestAccountDeletionLabel,
+                  isDestructive: true,
+                  onTap: () => _openLegalLink(legalLinks.accountDeletionUrl),
                 ),
                 _AccountRow(
                   icon: Icons.logout,

@@ -830,6 +830,36 @@ abstract class AppLocalizations {
   /// **'Support'**
   String get supportAccountLabel;
 
+  /// No description provided for @privacyPolicyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Privacy policy'**
+  String get privacyPolicyLabel;
+
+  /// No description provided for @termsAndConditionsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Terms and conditions'**
+  String get termsAndConditionsLabel;
+
+  /// No description provided for @requestAccountDeletionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Request account deletion'**
+  String get requestAccountDeletionLabel;
+
+  /// No description provided for @legalLinkNotConfigured.
+  ///
+  /// In en, this message translates to:
+  /// **'This legal page is not available yet.'**
+  String get legalLinkNotConfigured;
+
+  /// No description provided for @legalLinkOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open the selected legal page.'**
+  String get legalLinkOpenFailed;
+
   /// No description provided for @farmProfileSubtitle.
   ///
   /// In en, this message translates to:

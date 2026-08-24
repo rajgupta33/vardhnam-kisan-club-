@@ -34,8 +34,8 @@ export default async function SupportPage({ searchParams }: SupportPageProps) {
 
   const ticketsResult = await loadSupportTickets({
     ...(status ? { status } : {}),
-    page: String(page),
-    limit: String(limit),
+    page,
+    limit,
   });
 
   const tickets = ticketsResult.ok ? ticketsResult.data.items : [];

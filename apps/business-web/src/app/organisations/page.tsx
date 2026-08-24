@@ -33,8 +33,8 @@ export default async function OrganisationsPage({
   const page = Math.max(1, Number.parseInt(readParam(resolved.page) ?? '1', 10) || 1);
 
   const result = await loadOrganisations({
-    page: String(page),
-    limit: String(limit),
+    page,
+    limit,
     ...(status ? { status } : {}),
     ...(q ? { q } : {}),
   });

@@ -10,7 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PermissionCode } from '../access/permission-codes';
 import { PermissionsGuard } from '../access/permissions.guard';
@@ -22,6 +22,7 @@ import { getRequestId } from '../common/middleware/correlation-id.middleware';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UserPageResponseDto, UserResponseEnvelopeDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
 
 @ApiTags('users')
@@ -31,18 +32,21 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
+  @ApiOkResponse({ type: UserPageResponseDto })
   @RequirePermissions(PermissionCode.USERS_READ_ANY)
   list(@Query() query: ListUsersQueryDto) {
     return this.usersService.list(query);
   }
 
   @Get(':userId')
+  @ApiOkResponse({ type: UserResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.USERS_READ_ANY)
   getById(@Param('userId', ParseUUIDPipe) userId: string) {
     return this.usersService.getById(userId);
   }
 
   @Post()
+  @ApiCreatedResponse({ type: UserResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.USERS_CREATE)
   create(
     @Body() dto: CreateUserDto,
@@ -53,6 +57,7 @@ export class UsersController {
   }
 
   @Patch(':userId')
+  @ApiOkResponse({ type: UserResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.USERS_UPDATE_ANY)
   update(
     @Param('userId', ParseUUIDPipe) userId: string,

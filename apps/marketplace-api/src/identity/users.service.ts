@@ -14,6 +14,64 @@ import { CreateUserDto } from './dto/create-user.dto';
 import type { ListUsersQueryDto } from './dto/list-users-query.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
 
+const safeUserIdentitySelect = {
+  id: true,
+  email: true,
+  phone: true,
+  status: true,
+  profile: { select: { displayName: true } },
+} satisfies Prisma.UserSelect;
+
+const organisationResponseSelect = {
+  id: true,
+  type: true,
+  slug: true,
+  legalName: true,
+  displayName: true,
+  gstin: true,
+  registeredStateCode: true,
+  gstinVerifiedAt: true,
+  status: true,
+  reviewedAt: true,
+  reviewedByUserId: true,
+  reviewedBy: { select: safeUserIdentitySelect },
+  reviewReason: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.OrganisationSelect;
+
+const userResponseSelect = {
+  id: true,
+  email: true,
+  phone: true,
+  status: true,
+  profile: {
+    select: {
+      id: true,
+      userId: true,
+      displayName: true,
+      preferredLocale: true,
+      timezone: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  },
+  memberships: {
+    select: {
+      id: true,
+      userId: true,
+      organisationId: true,
+      role: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true,
+      organisation: { select: organisationResponseSelect },
+    },
+  },
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.UserSelect;
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -47,14 +105,7 @@ export class UsersService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({
         where,
-        include: {
-          profile: true,
-          memberships: {
-            include: {
-              organisation: true,
-            },
-          },
-        },
+        select: userResponseSelect,
         orderBy: {
           createdAt: 'desc',
         },
@@ -75,14 +126,7 @@ export class UsersService {
   async getById(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        profile: true,
-        memberships: {
-          include: {
-            organisation: true,
-          },
-        },
-      },
+      select: userResponseSelect,
     });
 
     if (!user) {
@@ -117,9 +161,7 @@ export class UsersService {
               },
             },
           },
-          include: {
-            profile: true,
-          },
+          select: userResponseSelect,
         });
 
         const auditInput: AuditRecordInput = this.withActor(actor, {
@@ -150,8 +192,19 @@ export class UsersService {
   async update(userId: string, dto: UpdateUserDto, actor: CurrentUser, requestId?: string) {
     const existing = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        profile: true,
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        status: true,
+        profile: {
+          select: {
+            id: true,
+            displayName: true,
+            preferredLocale: true,
+            timezone: true,
+          },
+        },
       },
     });
 
@@ -253,14 +306,7 @@ export class UsersService {
 
         return tx.user.findUniqueOrThrow({
           where: { id: userId },
-          include: {
-            profile: true,
-            memberships: {
-              include: {
-                organisation: true,
-              },
-            },
-          },
+          select: userResponseSelect,
         });
       });
     } catch (error) {

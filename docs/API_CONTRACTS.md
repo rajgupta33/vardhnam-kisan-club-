@@ -19,6 +19,14 @@
 - Include or return `x-request-id` for correlation.
 - Use idempotency keys for checkout, mock payment and future webhook endpoints.
 
+## Generated OpenAPI Artifact
+
+The generated transport contract is committed at `apps/marketplace-api/openapi.json`. `npm --workspace @vardhnam/marketplace-api run openapi:generate` rebuilds it from the same Swagger scanner used by `/api/docs` without starting a listening server. `npm run check:openapi` fails when controller or DTO metadata has drifted from the committed file and runs in CI.
+
+The artifact generates TypeScript path and schema types at `packages/api-client/src/generated/openapi.ts`. Run `npm --workspace @vardhnam/api-client run generate` after regenerating OpenAPI; `npm run check:api-client` enforces drift in CI. Generated portal domains now include Admin Jobs (queue depths, dead letters and audited retry), Notifications (delivery-log filters and queued retry), Tally (sync records, attempt history, reconciliation and manual mock outcomes), Dashboard (permission-scoped summary and audited export), Support (list, detail, assignment and lifecycle actions), Payouts (masked account reads, backend statement totals, audited self-upsert and verification decisions), Organisation list/detail reads, and User list/detail reads. Dart generation and the remaining TypeScript consumer migration are still open.
+
+`docs/API_CONTRACTS.md` remains the human-readable source for ownership, permission, state-machine, audit, mock-provider and financial rules that cannot be inferred reliably from transport schemas alone. The provider-internal `storage/local-object` route is intentionally absent from OpenAPI.
+
 ## Standard Success Envelope
 
 ```json
@@ -55,19 +63,19 @@ Checks database and Redis readiness.
 
 ### `POST /api/v1/users`
 
-Creates a user account. Requires `users:create`.
+Creates a user account. Requires `users:create`. The response uses the same explicit safe user projection as reads and never serializes authentication secrets.
 
 ### `GET /api/v1/users`
 
-Lists users with pagination. Requires `users:read:any`.
+Lists users with pagination. Requires `users:read:any`. User, profile, membership and organisation fields are explicitly selected; `passwordHash` and authentication relations are never selected for the response.
 
 ### `GET /api/v1/users/:userId`
 
-Reads one user with profile and memberships. Requires `users:read:any`.
+Reads one user with profile and memberships. Requires `users:read:any`. The response uses the same safe projection as the list endpoint.
 
 ### `PATCH /api/v1/users/:userId`
 
-Updates user contact, profile and status fields. Requires `users:update:any`. Writes audit records for user, profile and status changes.
+Updates user contact, profile and status fields. Requires `users:update:any`. Writes audit records for user, profile and status changes and returns only the safe user projection.
 
 ### `POST /api/v1/organisations`
 
@@ -75,11 +83,11 @@ Creates an organisation in pending verification by default. Requires `organisati
 
 ### `GET /api/v1/organisations`
 
-Lists organisations with pagination. Requires `organisations:read:any`.
+Lists organisations with pagination. Requires `organisations:read:any`. Reviewer identity is projected to ID, email, phone, status and display name; authentication secrets such as `passwordHash` are never selected for the response.
 
 ### `GET /api/v1/organisations/:organisationId`
 
-Reads one organisation. Users with `organisations:read:any` may read any organisation. Users with `organisations:read:own` may read only the organisation in their active request context.
+Reads one organisation. Users with `organisations:read:any` may read any organisation. Users with `organisations:read:own` may read only the organisation in their active request context. Reviewer and membership-user data use the same safe identity projection and never include authentication secrets.
 
 ### `PATCH /api/v1/organisations/:organisationId`
 
@@ -719,6 +727,23 @@ Requires the configured protected-request authentication mechanism. In JWT mode 
 - `GET /api/v1/payouts/statements/me`: requires own-statement permission, scopes entries by authenticated `recipientUserId`, supports exact `PROVISIONAL`, `FINAL` or `REVERSED` status plus backend pagination, and returns backend-summed totals for every status independently of the active filter. KC-10D displays these values without recalculating commission and uses duplicate-safe pagination.
 - `PUT /api/v1/payouts/accounts/me`: submits the authenticated user's account details and resets verification to pending. The shared partner-app workflow exposes this route to supported partner roles with `payout-accounts:write:own`, requires the complete account number on every submission, uppercases IFSC input and renders only the server-masked account number returned by the API.
 
+## Tally Sync Endpoints
+
+These endpoints implement a durable mock Tally sync queue with append-only attempt history and a reconciliation surface. They do not write to a real Tally instance. Every endpoint is authenticated; read routes require `tally-sync:read` and mutation routes require `tally-sync:manage`.
+
+- `POST /api/v1/tally/sync-records`: snapshots one source record and creates a `PENDING` sync record. `recordType` is one of `PARTY_MASTER`, `ITEM_MASTER`, `VOUCHER`, `INVOICE`, `CREDIT_NOTE`, `RECEIPT`, `SETTLEMENT` or `COMMISSION_INVOICE`. The required source field is respectively `organisationId`, `productVariantId`, `referenceLabel` plus `payload`, `productInvoiceId`, `financialLedgerEntryId`, `financialLedgerEntryId`, `settlementId` or `commissionEntryId`. A commission entry must be `FINAL`; credit notes require a `REFUND` ledger entry and receipts require a `FARMER_PAYMENT` ledger entry. The backend resolves and freezes the reference label, reference number, integer-paise amount and JSON payload rather than trusting caller-supplied accounting snapshots. An optional `reason` is limited to 500 characters. Success audits `TALLY_SYNC_RECORD_ENQUEUED`.
+- `GET /api/v1/tally/sync-records`: paginated queue ordered newest first. Supports exact `recordType`, exact `status` (`PENDING`, `SYNCING`, `SYNCED`, `FAILED`), `sourceEntityId`, `page` and `limit`. Pagination defaults to page 1 with 25 rows and permits at most 100 rows. Returns `{items, page, limit, total}`.
+- `GET /api/v1/tally/sync-records/:id`: UUID-keyed detail including attempts ordered by ascending `attemptNumber`. Returns `NOT_FOUND` for an unknown record.
+- `POST /api/v1/tally/sync-records/:id/attempt`: records a mock attempt only from `PENDING` or `FAILED`; an already `SYNCED` record returns `CONFLICT`. Body `outcome` is `SYNCED` or `FAILED`, with optional `tallyReferenceId` (100 characters), `errorCode` (100), `errorMessage` (500) and audit `reason` (500). A success clears prior error fields and creates a clearly mock reference when none is supplied; a failure uses explicit mock defaults when error details are omitted. Every attempt increments `attemptCount`, appends a `TallySyncAttempt`, and audits either `TALLY_SYNC_RECORD_SYNCED` or `TALLY_SYNC_RECORD_SYNC_FAILED`.
+- `GET /api/v1/tally/reconciliation`: backend aggregate grouped by record type and status. Each row contains `recordType`, `status`, `count`, `totalAmountPaise` and `oldestUnsyncedAgeHours`; the age is populated only for `PENDING` and `FAILED` groups. Clients must display the integer-paise aggregate and must not recalculate accounting totals from paginated sync records.
+
+## Dashboard Endpoints
+
+- `GET /api/v1/dashboards/summary`: requires `dashboards:read`. Returns `{items}` where each item contains `code`, human-readable `label`, `scope` (`PLATFORM`, `ORGANISATION` or `SELF`) and backend-calculated integer `count`. The service includes an item only when the current actor has its underlying domain permission and its scope applies. Organisation counts are constrained by the authenticated organisation and self counts by the authenticated user; clients must not widen or recompute them.
+- `GET /api/v1/dashboards/summary/export`: requires `dashboards:export`, returns the same permission-scoped `{items}` JSON contract, and audits `DASHBOARD_EXPORTED` with the exported item codes and request ID. The business portal's `/dashboard-export` route converts this JSON to CSV; the API endpoint itself does not return CSV.
+
+Both dashboard routes are protected even though every initial platform role currently receives `dashboards:read`. Export remains separately permissioned and does not become available merely because a user can view the dashboard.
+
 ### Promoter Farmer Leads
 
 - `POST /api/v1/promoters/leads` requires `promoter-leads:create:own` and a promoter or sales-partner context. It normalizes Indian mobile numbers to `+91`, rejects a second open own lead for the same phone and audits a masked phone snapshot.
@@ -895,7 +920,15 @@ Every farm, cycle and activity mutation writes an audit record in the same datab
 
 `GET /api/v1/promoters/surveys/reference/crops` and `POST /api/v1/promoters/surveys` provide the general WP-13 survey path independently of the Kisan Club feature flag. Creation accepts `farmerProfileId`, a validated farm and an optional first crop cycle, and requires the authenticated promoter/sales partner to hold the active primary attribution for that farmer in the current organisation. The farmer user, farmer membership and organisation must remain active. The resulting farm has `membershipId = null`, remains directly owned by `farmerProfileId`, and does not enter Club advisory generation. General surveys reject latitude and longitude until a separately authorised general precise-location consent model exists.
 
-`POST /api/v1/promoters/visits` requires `promoter-visits:create:own` and accepts exactly one `farmerLeadId` or `farmerProfileId`, a controlled visit purpose, optional notes, UTC occurrence time and an explicit location outcome. Lead targets must belong to the authenticated promoter and organisation; farmer targets require an active primary attribution plus an active farmer identity. Granted location requires latitude, longitude, device accuracy and capture time within 30 minutes of the visit; denied, unavailable and not-requested outcomes reject all coordinate fields. `GET /api/v1/promoters/visits/me` is forced to the current promoter and organisation with pagination and optional target filters. Operations/admin may use the any-scope list permission. Individual reads repeat own-or-any resource checks. Visit records have no update or delete endpoint.
+## Promoter Visit Endpoints
+
+- `POST /api/v1/promoters/visits`: requires `promoter-visits:create:own` and an active `PROMOTER` or `SALES_PARTNER` context. Body requires exactly one of `farmerLeadId` or `farmerProfileId`, `purpose`, strict ISO-8601 `occurredAt`, and `locationStatus`; `notes` is optional up to 2,000 characters. Purpose is `LEAD_FOLLOW_UP`, `FARMER_SUPPORT`, `ORDER_ASSISTANCE`, `FARM_SURVEY`, `COMPLAINT_FOLLOW_UP` or `OTHER`. The visit cannot be more than five minutes in the future. Lead targets must belong to the authenticated promoter and organisation; farmer targets require that promoter's active attribution plus an active farmer identity. Success appends the visit and audits `PROMOTER_VISIT_RECORDED` in one transaction.
+- Location status is `NOT_REQUESTED`, `GRANTED`, `DENIED` or `UNAVAILABLE`. `GRANTED` requires latitude, longitude, non-negative device accuracy and strict ISO-8601 `locationCapturedAt`; capture time must be within 30 minutes of the visit and cannot be more than five minutes in the future. Every other status rejects all coordinate, accuracy and capture-time fields. Location collection therefore remains explicit and cannot be inferred from missing fields.
+- `GET /api/v1/promoters/visits/me`: requires `promoter-visits:read:own`, always scopes records to the authenticated promoter user and active organisation, and supports optional `farmerLeadId`, `farmerProfileId`, `page` and `limit` filters. Pagination defaults to 25 and is capped at 100.
+- `GET /api/v1/promoters/visits`: requires `promoter-visits:read:any` and provides the operations/admin queue with the same target filters and pagination contract.
+- `GET /api/v1/promoters/visits/:visitId`: requires the own-read permission at the route. The service allows a different promoter's record only when the actor also holds `promoter-visits:read:any`; otherwise both user and organisation must match. IDs are UUID validated.
+
+Visit responses include their lead or farmer summary where applicable and are ordered by occurrence time descending. Visit records are append-only: there is no update or delete endpoint.
 
 ## Kisan Club territories and promoter assignment
 

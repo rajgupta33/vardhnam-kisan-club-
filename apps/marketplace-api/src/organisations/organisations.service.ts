@@ -27,6 +27,43 @@ import {
 import type { UpdateMembershipDto } from './dto/update-membership.dto';
 import type { UpdateOrganisationDto } from './dto/update-organisation.dto';
 
+const safeUserIdentitySelect = {
+  id: true,
+  email: true,
+  phone: true,
+  status: true,
+  profile: { select: { displayName: true } },
+} satisfies Prisma.UserSelect;
+
+const organisationResponseSelect = {
+  id: true,
+  type: true,
+  slug: true,
+  legalName: true,
+  displayName: true,
+  gstin: true,
+  registeredStateCode: true,
+  gstinVerifiedAt: true,
+  status: true,
+  reviewedAt: true,
+  reviewedByUserId: true,
+  reviewReason: true,
+  createdAt: true,
+  updatedAt: true,
+  reviewedBy: { select: safeUserIdentitySelect },
+} satisfies Prisma.OrganisationSelect;
+
+const membershipResponseSelect = {
+  id: true,
+  userId: true,
+  organisationId: true,
+  role: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  user: { select: safeUserIdentitySelect },
+} satisfies Prisma.OrganisationMembershipSelect;
+
 @Injectable()
 export class OrganisationsService {
   constructor(
@@ -56,13 +93,7 @@ export class OrganisationsService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.organisation.findMany({
         where,
-        include: {
-          reviewedBy: {
-            include: {
-              profile: true,
-            },
-          },
-        },
+        select: organisationResponseSelect,
         orderBy: {
           createdAt: 'desc',
         },
@@ -83,20 +114,10 @@ export class OrganisationsService {
   async getById(organisationId: string) {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: organisationId },
-      include: {
+      select: {
+        ...organisationResponseSelect,
         memberships: {
-          include: {
-            user: {
-              include: {
-                profile: true,
-              },
-            },
-          },
-        },
-        reviewedBy: {
-          include: {
-            profile: true,
-          },
+          select: membershipResponseSelect,
         },
       },
     });
@@ -365,13 +386,11 @@ export class OrganisationsService {
       where: {
         organisationId,
       },
-      include: {
-        user: {
-          include: {
-            profile: true,
-          },
+      select: {
+        ...membershipResponseSelect,
+        organisation: {
+          select: organisationResponseSelect,
         },
-        organisation: true,
       },
       orderBy: {
         createdAt: 'desc',

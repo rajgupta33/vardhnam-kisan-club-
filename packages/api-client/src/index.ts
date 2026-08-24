@@ -1,3 +1,46 @@
+import createClient, { type Client, type Middleware } from 'openapi-fetch';
+import type { paths } from './generated/openapi.js';
+
+export type {
+  components as OpenApiComponents,
+  operations as OpenApiOperations,
+  paths as OpenApiPaths,
+} from './generated/openapi.js';
+
+export interface OpenApiClientOptions {
+  baseUrl: string;
+  getAccessToken?: () => Promise<string | undefined>;
+  defaultHeaders?: Record<string, string>;
+}
+
+export type OpenApiClient = Client<paths>;
+
+/**
+ * Creates the contract-generated transport used for incremental migrations.
+ * Endpoint paths, query parameters, request bodies and documented responses
+ * come from the committed OpenAPI artifact rather than hand-written copies.
+ */
+export function createOpenApiClient(options: OpenApiClientOptions): OpenApiClient {
+  const client = createClient<paths>({
+    baseUrl: options.baseUrl.endsWith('/') ? options.baseUrl.slice(0, -1) : options.baseUrl,
+    headers: {
+      Accept: 'application/json',
+      ...options.defaultHeaders,
+    },
+  });
+
+  const authentication: Middleware = {
+    async onRequest({ request }) {
+      const accessToken = await options.getAccessToken?.();
+      if (accessToken) request.headers.set('Authorization', `Bearer ${accessToken}`);
+      return request;
+    },
+  };
+  client.use(authentication);
+
+  return client;
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken?: () => Promise<string | undefined>;
@@ -2625,9 +2668,7 @@ export class VardhnamApiClient {
   }
 
   getFulfilmentOrderInvoicePdf(orderId: string): Promise<ProductInvoiceDocument> {
-    return this.request<ProductInvoiceDocument>(
-      `/api/v1/fulfilment/orders/${orderId}/invoice/pdf`,
-    );
+    return this.request<ProductInvoiceDocument>(`/api/v1/fulfilment/orders/${orderId}/invoice/pdf`);
   }
 
   downloadFulfilmentOrderInvoicePdf(orderId: string): Promise<SignedFileDownload> {

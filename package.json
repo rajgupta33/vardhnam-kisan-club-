@@ -21,6 +21,8 @@
     "test": "npm run test --workspaces --if-present",
     "test:scaffold": "node --test scripts/phase0.test.mjs",
     "check:i18n": "node scripts/check-arb-parity.mjs",
+    "check:openapi": "npm --workspace @vardhnam/marketplace-api run openapi:check",
+    "check:api-client": "npm --workspace @vardhnam/api-client run check:generated",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "prisma:generate": "npm --workspace @vardhnam/marketplace-api run prisma:generate",
     "prisma:migrate": "npm --workspace @vardhnam/marketplace-api run prisma:migrate",

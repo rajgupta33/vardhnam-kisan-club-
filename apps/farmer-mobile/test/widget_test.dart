@@ -17,6 +17,7 @@ import 'package:vardhnam_farmer_mobile/src/localization/locale_controller.dart';
 import 'package:vardhnam_farmer_mobile/src/localization/locale_preferences.dart';
 import 'package:vardhnam_farmer_mobile/src/kisan_club/kisan_club_membership_repository.dart';
 import 'package:vardhnam_farmer_mobile/src/kisan_club/kisan_club_models.dart';
+import 'package:vardhnam_farmer_mobile/src/legal/farmer_legal_links.dart';
 import 'package:vardhnam_farmer_mobile/src/marketplace/marketplace_api.dart';
 import 'package:vardhnam_farmer_mobile/src/marketplace/marketplace_discovery_cache.dart';
 import 'package:vardhnam_farmer_mobile/src/network/authenticated_api_client.dart';
@@ -786,6 +787,45 @@ void main() {
     );
     expect(find.widgetWithText(VardhnamInfoCard, 'Home'), findsOneWidget);
     expect(find.text('Default'), findsOneWidget);
+  });
+
+  testWidgets('opens configured legal and account deletion pages', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final launcher = _RecordingLegalLinkLauncher();
+    await tester.pumpWidget(
+      FarmerApp(
+        farmerProfileRepository: _FakeFarmerProfileRepository(),
+        initialLocation: '/profile',
+        initialSession: _testSession,
+        farmerLegalLinks: FarmerLegalLinks.fromValues(
+          privacyPolicyUrl: 'https://www.vardhnamagrotech.com/privacy',
+          termsUrl: 'https://www.vardhnamagrotech.com/terms',
+          accountDeletionUrl: 'https://www.vardhnamagrotech.com/delete-account',
+        ),
+        externalLegalLinkLauncher: launcher,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final label in <String>[
+      'Privacy policy',
+      'Terms and conditions',
+      'Request account deletion',
+    ]) {
+      await tester.tap(find.text(label));
+      await tester.pump();
+    }
+
+    expect(launcher.openedUris.map((uri) => uri.path), <String>[
+      '/privacy',
+      '/terms',
+      '/delete-account',
+    ]);
   });
 
   testWidgets('Hindi account remains usable on narrow 200 percent text', (
@@ -1649,6 +1689,16 @@ class _FakeFarmerProfileRepository implements FarmerProfileRepository {
       cropInterests: input.cropInterests,
       addresses: _testProfile.addresses,
     );
+  }
+}
+
+class _RecordingLegalLinkLauncher implements ExternalLegalLinkLauncher {
+  final openedUris = <Uri>[];
+
+  @override
+  Future<bool> launch(Uri uri) async {
+    openedUris.add(uri);
+    return true;
   }
 }
 

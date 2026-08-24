@@ -10,7 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PermissionCode } from '../access/permission-codes';
 import { PermissionsGuard } from '../access/permissions.guard';
@@ -23,6 +23,10 @@ import { ConfirmNotificationAttemptDto } from './dto/confirm-notification-attemp
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { ListMyNotificationsQueryDto } from './dto/list-my-notifications-query.dto';
 import { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
+import {
+  NotificationDispatchResponseDto,
+  NotificationPageResponseDto,
+} from './dto/notification-response.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { NotificationDeliveryService } from './notification-delivery.service';
 import { NotificationsService } from './notifications.service';
@@ -47,6 +51,7 @@ export class NotificationsController {
   }
 
   @Get()
+  @ApiOkResponse({ type: NotificationPageResponseDto })
   @RequirePermissions(PermissionCode.NOTIFICATIONS_READ_ANY)
   listNotifications(@Query() query: ListNotificationsQueryDto) {
     return this.notificationsService.listNotifications(query);
@@ -100,6 +105,7 @@ export class NotificationsController {
     description:
       'Operational retry for a failed send. Delivery itself runs on the notifications queue, so this returns as soon as the job is queued.',
   })
+  @ApiCreatedResponse({ type: NotificationDispatchResponseDto })
   @RequirePermissions(PermissionCode.NOTIFICATIONS_MANAGE)
   async dispatch(
     @Param('id', ParseUUIDPipe) id: string,

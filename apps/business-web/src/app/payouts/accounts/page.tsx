@@ -24,8 +24,8 @@ export default async function PayoutAccountsPage({
   const page = Math.max(1, Number.parseInt(readParam(resolved.page) ?? '1', 10) || 1);
 
   const result = await loadPayoutAccounts({
-    page: String(page),
-    limit: String(limit),
+    page,
+    limit,
     ...(status ? { status } : {}),
   });
 

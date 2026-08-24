@@ -1,0 +1,7 @@
+# Copy this file to key.properties and replace every placeholder locally.
+# key.properties and keystore files are excluded from Git.
+# storeFile may be an absolute path or a path relative to apps/farmer-mobile/android.
+storeFile=C:/secure-path/vardhnam-farmer-upload.jks
+storePassword=REPLACE_WITH_UPLOAD_KEYSTORE_PASSWORD
+keyAlias=vardhnam-farmer-upload
+keyPassword=REPLACE_WITH_UPLOAD_KEY_PASSWORD

@@ -23,8 +23,8 @@ export default async function UsersPage({ searchParams }: { searchParams?: Promi
 
   const [result, session] = await Promise.all([
     loadUsers({
-      page: String(page),
-      limit: String(limit),
+      page,
+      limit,
       ...(status ? { status } : {}),
       ...(q ? { q } : {}),
     }),

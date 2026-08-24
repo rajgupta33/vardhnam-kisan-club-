@@ -7,7 +7,7 @@ export class LoginDto {
   @MinLength(3)
   identifier!: string;
 
-  @ApiProperty({ example: 'Demo@12345' })
+  @ApiProperty({ example: 'Example@12345' })
   @IsString()
   @MinLength(8)
   password!: string;

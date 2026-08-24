@@ -6,8 +6,10 @@ export const colors = {
   danger: '#b42318',
   warning: '#b54708',
   success: '#027a48',
+  focus: '#1d4ed8',
   ink: '#1f2933',
   muted: '#697586',
+  line: '#d8dfd3',
   surface: '#ffffff',
   background: '#f6f7f2',
 } as const;

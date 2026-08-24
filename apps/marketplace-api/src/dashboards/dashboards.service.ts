@@ -18,8 +18,7 @@ import { PermissionCode } from '../access/permission-codes';
 import { AuditService } from '../audit/audit.service';
 import type { CurrentUser } from '../auth/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
-
-type DashboardScope = 'PLATFORM' | 'ORGANISATION' | 'SELF';
+import { DashboardScope, DashboardSummaryDataResponseDto } from './dto/dashboard-response.dto';
 
 interface DashboardItemDefinition {
   code: string;
@@ -28,13 +27,6 @@ interface DashboardItemDefinition {
   permission: PermissionCode;
   isApplicable?: (actor: CurrentUser) => boolean;
   count: (actor: CurrentUser) => Promise<number>;
-}
-
-export interface DashboardItem {
-  code: string;
-  label: string;
-  scope: DashboardScope;
-  count: number;
 }
 
 @Injectable()
@@ -49,7 +41,7 @@ export class DashboardsService {
     this.itemDefinitions = this.buildItemDefinitions();
   }
 
-  async getSummary(actor: CurrentUser): Promise<{ items: DashboardItem[] }> {
+  async getSummary(actor: CurrentUser): Promise<DashboardSummaryDataResponseDto> {
     const applicableItems = this.itemDefinitions.filter(
       (item) =>
         this.accessService.hasPermission(actor, item.permission) &&
@@ -68,7 +60,10 @@ export class DashboardsService {
     };
   }
 
-  async exportSummary(actor: CurrentUser, requestId?: string): Promise<{ items: DashboardItem[] }> {
+  async exportSummary(
+    actor: CurrentUser,
+    requestId?: string,
+  ): Promise<DashboardSummaryDataResponseDto> {
     const summary = await this.getSummary(actor);
 
     await this.auditService.record({
@@ -90,7 +85,7 @@ export class DashboardsService {
       {
         code: 'onboarding_pending',
         label: 'Organisations pending onboarding verification',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.ONBOARDING_QUEUE_READ,
         count: () =>
           this.prisma.organisation.count({
@@ -100,7 +95,7 @@ export class DashboardsService {
       {
         code: 'catalogue_pending_review',
         label: 'Catalogue records pending review',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.CATALOGUE_QUEUE_READ,
         count: async () => {
           const [brandCount, productCount] = await Promise.all([
@@ -113,7 +108,7 @@ export class DashboardsService {
       {
         code: 'offers_pending_review',
         label: 'Distributor offers pending review',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.OFFERS_QUEUE_READ,
         count: () =>
           this.prisma.distributorOffer.count({
@@ -123,7 +118,7 @@ export class DashboardsService {
       {
         code: 'support_tickets_open_any',
         label: 'Open support tickets (platform-wide)',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.SUPPORT_TICKETS_READ_ANY,
         count: () =>
           this.prisma.supportTicket.count({
@@ -133,7 +128,7 @@ export class DashboardsService {
       {
         code: 'tally_sync_pending',
         label: 'Tally sync records awaiting sync',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.TALLY_SYNC_READ,
         count: () =>
           this.prisma.tallySyncRecord.count({
@@ -143,7 +138,7 @@ export class DashboardsService {
       {
         code: 'notifications_failed',
         label: 'Failed notifications',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.NOTIFICATIONS_READ_ANY,
         count: () =>
           this.prisma.notification.count({ where: { status: NotificationStatus.FAILED } }),
@@ -151,15 +146,14 @@ export class DashboardsService {
       {
         code: 'settlements_eligible',
         label: 'Settlements eligible for payout',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.FINANCE_SETTLEMENTS_READ,
-        count: () =>
-          this.prisma.settlement.count({ where: { status: SettlementStatus.ELIGIBLE } }),
+        count: () => this.prisma.settlement.count({ where: { status: SettlementStatus.ELIGIBLE } }),
       },
       {
         code: 'commission_entries_provisional',
         label: 'Commission entries ready to finalize',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.FINANCE_COMMISSION_ENTRIES_READ,
         count: () =>
           this.prisma.commissionEntry.count({
@@ -169,7 +163,7 @@ export class DashboardsService {
       {
         code: 'payout_accounts_pending_verification',
         label: 'Payout accounts pending verification',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.PAYOUT_ACCOUNTS_READ_ANY,
         count: () =>
           this.prisma.payoutAccount.count({
@@ -179,7 +173,7 @@ export class DashboardsService {
       {
         code: 'fulfilment_orders_pending_any',
         label: 'Orders awaiting fulfilment action (platform-wide)',
-        scope: 'PLATFORM',
+        scope: DashboardScope.PLATFORM,
         permission: PermissionCode.FULFILMENT_ORDERS_READ_ANY,
         count: () =>
           this.prisma.productOrder.count({
@@ -198,7 +192,7 @@ export class DashboardsService {
       {
         code: 'catalogue_pending_review_own',
         label: 'Own catalogue records pending review',
-        scope: 'ORGANISATION',
+        scope: DashboardScope.ORGANISATION,
         permission: PermissionCode.CATALOGUE_READ_OWN,
         isApplicable: (actor) => Boolean(actor.organisationId),
         count: async (actor) => {
@@ -222,7 +216,7 @@ export class DashboardsService {
       {
         code: 'offers_pending_review_own',
         label: 'Own distributor offers pending review',
-        scope: 'ORGANISATION',
+        scope: DashboardScope.ORGANISATION,
         permission: PermissionCode.OFFERS_READ_OWN,
         isApplicable: (actor) => Boolean(actor.organisationId),
         count: (actor) =>
@@ -236,7 +230,7 @@ export class DashboardsService {
       {
         code: 'fulfilment_orders_pending_own',
         label: 'Own orders awaiting fulfilment action',
-        scope: 'ORGANISATION',
+        scope: DashboardScope.ORGANISATION,
         permission: PermissionCode.FULFILMENT_ORDERS_READ_OWN,
         isApplicable: (actor) => Boolean(actor.organisationId),
         count: (actor) =>
@@ -256,8 +250,8 @@ export class DashboardsService {
       },
       {
         code: 'support_tickets_open_own_org',
-        label: 'Own organisation\'s open support tickets',
-        scope: 'ORGANISATION',
+        label: "Own organisation's open support tickets",
+        scope: DashboardScope.ORGANISATION,
         permission: PermissionCode.SUPPORT_TICKETS_READ_OWN,
         isApplicable: (actor) => Boolean(actor.organisationId),
         count: (actor) =>
@@ -271,7 +265,7 @@ export class DashboardsService {
       {
         code: 'my_support_tickets_open',
         label: 'My open support tickets',
-        scope: 'SELF',
+        scope: DashboardScope.SELF,
         permission: PermissionCode.SUPPORT_TICKETS_READ_OWN,
         count: (actor) =>
           this.prisma.supportTicket.count({
@@ -284,7 +278,7 @@ export class DashboardsService {
       {
         code: 'my_unread_notifications',
         label: 'My unread notifications',
-        scope: 'SELF',
+        scope: DashboardScope.SELF,
         permission: PermissionCode.NOTIFICATIONS_READ_OWN,
         count: (actor) =>
           this.prisma.notification.count({
@@ -294,7 +288,7 @@ export class DashboardsService {
       {
         code: 'my_payout_account_action_needed',
         label: 'My payout account needs attention',
-        scope: 'SELF',
+        scope: DashboardScope.SELF,
         permission: PermissionCode.PAYOUT_ACCOUNTS_READ_OWN,
         count: (actor) =>
           this.prisma.payoutAccount.count({
@@ -304,7 +298,7 @@ export class DashboardsService {
       {
         code: 'my_promoter_attributions_active',
         label: 'My active promoter attributions',
-        scope: 'SELF',
+        scope: DashboardScope.SELF,
         permission: PermissionCode.PROMOTER_ATTRIBUTIONS_READ_OWN,
         count: (actor) =>
           this.prisma.promoterAttribution.count({
@@ -314,7 +308,7 @@ export class DashboardsService {
       {
         code: 'my_delivery_assignments_pending',
         label: 'My pending delivery assignments',
-        scope: 'SELF',
+        scope: DashboardScope.SELF,
         permission: PermissionCode.DELIVERY_ASSIGNMENTS_READ_OWN,
         count: (actor) =>
           this.prisma.productDeliveryAssignment.count({

@@ -1,11 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
 import { installShutdownHandlers } from './common/shutdown';
 import { JsonLoggerService } from './common/logger/json-logger.service';
 import { validateEnv } from './config/env.schema';
+import { createOpenApiDocument } from './openapi';
 
 async function bootstrap(): Promise<void> {
   const env = validateEnv(process.env);
@@ -19,15 +20,7 @@ async function bootstrap(): Promise<void> {
   configureApp(app, env);
 
   if (env.NODE_ENV !== 'production') {
-    const openApiConfig = new DocumentBuilder()
-      .setTitle('Vardhnam Agrotech Marketplace API')
-      .setDescription(
-        'Phase 4E onboarding, audit, catalogue, inventory, distributor offer, farmer-safe discovery, operational reporting, farmer profile, cart, checkout, product order, mock payment and distributor fulfilment (accept/pack/invoice/dispatch/delivery) foundation API. Mock-only integrations.',
-      )
-      .setVersion('0.1.0')
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, openApiConfig);
+    const document = createOpenApiDocument(app);
     SwaggerModule.setup('api/docs', app, document);
   }
 

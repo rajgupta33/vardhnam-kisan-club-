@@ -19,6 +19,7 @@ import 'kisan_club/kisan_club_membership_repository.dart';
 import 'kisan_club/kisan_club_catalogue_repository.dart';
 import 'kisan_club/kisan_club_benefit_token_repository.dart';
 import 'kisan_club/kisan_club_promoter_repository.dart';
+import 'legal/farmer_legal_links.dart';
 import 'marketplace/marketplace_api.dart';
 import 'marketplace/marketplace_providers.dart';
 import 'marketplace/marketplace_discovery_cache.dart';
@@ -86,6 +87,8 @@ class FarmerApp extends StatelessWidget {
     this.farmerNotificationRepository,
     this.supportContactConfiguration,
     this.externalSupportLauncher,
+    this.farmerLegalLinks,
+    this.externalLegalLinkLauncher,
     this.kisanClubMembershipRepository,
     this.kisanClubCatalogueRepository,
     this.kisanClubBenefitTokenRepository,
@@ -115,6 +118,8 @@ class FarmerApp extends StatelessWidget {
   final FarmerNotificationRepository? farmerNotificationRepository;
   final SupportContactConfiguration? supportContactConfiguration;
   final ExternalSupportLauncher? externalSupportLauncher;
+  final FarmerLegalLinks? farmerLegalLinks;
+  final ExternalLegalLinkLauncher? externalLegalLinkLauncher;
   final KisanClubMembershipRepository? kisanClubMembershipRepository;
   final MarketplaceProductRepository? kisanClubCatalogueRepository;
   final KisanClubBenefitTokenRepository? kisanClubBenefitTokenRepository;
@@ -177,6 +182,12 @@ class FarmerApp extends StatelessWidget {
         if (externalSupportLauncher != null)
           externalSupportLauncherProvider.overrideWithValue(
             externalSupportLauncher!,
+          ),
+        if (farmerLegalLinks != null)
+          farmerLegalLinksProvider.overrideWithValue(farmerLegalLinks!),
+        if (externalLegalLinkLauncher != null)
+          externalLegalLinkLauncherProvider.overrideWithValue(
+            externalLegalLinkLauncher!,
           ),
         if (kisanClubMembershipRepository != null)
           kisanClubMembershipRepositoryProvider.overrideWithValue(

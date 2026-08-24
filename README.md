@@ -24,7 +24,7 @@ Managed agriculture marketplace for Vardhnam Agrotech.
 
 - `packages/shared-types`: shared role, status and API types.
 - `packages/validation`: shared validation constants and schemas.
-- `packages/api-client`: future generated OpenAPI client destination.
+- `packages/api-client`: legacy domain client plus generated OpenAPI path/schema types and typed transport for incremental consumer migration.
 - `packages/design-tokens`: shared UI tokens.
 
 ## Local Prerequisites
@@ -109,10 +109,22 @@ flutter run
 npm run lint
 npm run typecheck
 npm test
+npm run check:openapi
+npm run check:api-client
 npm --workspace @vardhnam/marketplace-api run test:integration
 npm run build
 npm run test:scaffold
 ```
+
+The committed API contract is `apps/marketplace-api/openapi.json`. Regenerate it after controller or DTO changes with:
+
+```bash
+npm --workspace @vardhnam/marketplace-api run openapi:generate
+```
+
+`npm run check:openapi` builds the API metadata without starting a listening server and fails when the committed document has drifted. See `docs/DECISIONS/0018-committed-openapi-contract.md`.
+
+Generate the TypeScript transport types after updating the committed OpenAPI document with `npm --workspace @vardhnam/api-client run generate`. `npm run check:api-client` fails when `packages/api-client/src/generated/openapi.ts` has drifted. The business portal Admin Jobs, Notifications, Tally, Dashboard, Support, Payout, Organisation list/detail and User list/detail workflows now use the generated client; remaining domains migrate incrementally. See `docs/DECISIONS/0019-incremental-generated-typescript-client.md`.
 
 Integration tests need PostgreSQL and Redis running, plus a **dedicated test
 database** — the suite truncates every table in whatever database it is pointed

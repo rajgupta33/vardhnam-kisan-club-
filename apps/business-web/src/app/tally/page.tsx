@@ -17,7 +17,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Record<string, string | string[] | undefined>;
-const statusValues: TallySyncStatus[] = ['PENDING', 'SYNCED', 'FAILED'];
+const statusValues: TallySyncStatus[] = ['PENDING', 'SYNCING', 'SYNCED', 'FAILED'];
 const recordTypeValues: TallySyncRecordType[] = [
   'PARTY_MASTER',
   'ITEM_MASTER',
@@ -42,8 +42,8 @@ export default async function TallyPage({
 
   const [recordsResult, reconciliationResult] = await Promise.all([
     loadTallySyncRecords({
-      page: String(page),
-      limit: String(limit),
+      page,
+      limit,
       ...(status ? { status } : {}),
       ...(recordType ? { recordType } : {}),
     }),

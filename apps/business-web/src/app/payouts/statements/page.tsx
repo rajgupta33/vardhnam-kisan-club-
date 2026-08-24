@@ -35,7 +35,7 @@ export default async function MyPayoutStatementPage({
 
   const [accountResult, statementResult] = await Promise.all([
     loadMyPayoutAccount(),
-    loadMyPayoutStatement({ page: String(page), limit: String(limit) }),
+    loadMyPayoutStatement({ page, limit }),
   ]);
 
   const statuses = [

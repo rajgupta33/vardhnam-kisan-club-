@@ -422,6 +422,21 @@ class AppLocalizationsHi extends AppLocalizations {
   String get supportAccountLabel => 'सहायता';
 
   @override
+  String get privacyPolicyLabel => 'गोपनीयता नीति';
+
+  @override
+  String get termsAndConditionsLabel => 'नियम और शर्तें';
+
+  @override
+  String get requestAccountDeletionLabel => 'खाता हटाने का अनुरोध करें';
+
+  @override
+  String get legalLinkNotConfigured => 'यह कानूनी पेज अभी उपलब्ध नहीं है।';
+
+  @override
+  String get legalLinkOpenFailed => 'चुना गया कानूनी पेज नहीं खुल सका।';
+
+  @override
   String get farmProfileSubtitle => 'अपने स्थान और फसल की जानकारी अद्यतन रखें।';
 
   @override

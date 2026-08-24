@@ -1,8 +1,10 @@
 # Development Roadmap
 
-> **Status note (2026-08-06):** This file records the phase-by-phase build log.
-> For the authoritative current state and the plan for all remaining work, read
-> `docs/HANDOVER.md` and `docs/REMAINING_IMPLEMENTATION_PLAN.md`.
+> **Status note (2026-08-23):** This file is a chronological build log, not a
+> current backlog. For the authoritative current state and remaining work, read
+> the 2026-08-23 snapshot in `docs/HANDOVER.md` and
+> `docs/REMAINING_IMPLEMENTATION_PLAN.md`. Later completion notes supersede older
+> “remaining” or “not started” bullets retained below.
 
 ## Phase 0 - Foundation
 
@@ -41,7 +43,7 @@
 - Completed Phase 1C: company/distributor onboarding detail views
 - Completed Phase 1C: KYC metadata review and organisation approval/rejection actions
 - Completed Phase 1C: audit log portal views and onboarding integration test coverage
-- Remaining Phase 1: production authentication decision and richer seeded demo onboarding data
+- Remaining Phase 1: connect a real OTP transport and replace demo identities/data with approved pilot onboarding data before production
 
 ## Phase 2 - Catalogue and Inventory
 
@@ -59,7 +61,7 @@
 - Completed Phase 2D: public read-only marketplace product listing and detail APIs
 - Completed Phase 2D: pincode, category, brand and search filters over approved catalogue and approved offers
 - Completed Phase 2D: farmer-visible seller, fulfilment and backend-derived availability metadata
-- Completed Phase 2D: farmer mobile product browse skeleton with sample listings
+- Completed Phase 2D and later farmer UI work: API-backed, filterable, paginated marketplace discovery and product detail with internal-test pack shots
 - Completed Phase 2E: offer pause, reactivation and archive operations with audit history
 - Completed Phase 2E: low-stock, expiring-batch and inventory ageing report APIs
 - Completed Phase 2E: business portal inventory ageing view and offer operation controls
@@ -71,19 +73,19 @@
 - Completed Phase 3A: authenticated farmer-owned cart foundation
 - Completed Phase 3A: cart item validation against approved offers, serviceable pincodes and inventory-derived availability
 - Completed Phase 3A: backend-generated cart price and availability snapshots
-- Completed Phase 3A: farmer mobile cart skeleton screen
+- Completed Phase 3A and later farmer UI work: backend-authoritative cart with seller grouping, quantity controls and revalidation
 - Completed Phase 3B: idempotent checkout from authenticated farmer cart
 - Completed Phase 3B: parent product checkout and distributor-split child product orders
 - Completed Phase 3B: product order status history and farmer-owned order read APIs
 - Completed Phase 3B: append-only batch-level inventory reservation movements
-- Completed Phase 3B: farmer mobile checkout review skeleton screen
+- Completed Phase 3B and later farmer UI work: checkout review and idempotent seller-split order creation
 - Completed Phase 3C: idempotent backend mock payment intent creation
 - Completed Phase 3C: backend mock payment confirmation with checkout and child order status transitions
 - Completed Phase 3C: mock payment event history, audit logs and farmer-owned payment read APIs
-- Completed Phase 3C: farmer mobile mock payment preview skeleton screen
+- Completed Phase 3C and later farmer UI work: explicit mock-payment success/failure/retry flow with authoritative refresh
 - Completed Phase 3D: farmer-owned checkout and child-order cancellation APIs for eligible unpaid or payment-failed records
 - Completed Phase 3D: append-only inventory reservation release movements and cancellation audit logs
-- Completed Phase 3D: idempotency coverage, integration tests and farmer mobile cancellation preview skeleton
+- Completed Phase 3D and later farmer UI work: idempotent checkout/child-order cancellation and lifecycle-aware order surfaces
 - Completed Phase 3: API-backed farmer product discovery UI
 
 ## Phase 4 - Distributor Fulfilment
@@ -104,7 +106,7 @@
 - Completed Phase 4F: end-to-end MVP acceptance spec driving PRODUCT_REQUIREMENTS section 30 through the HTTP API
 - Completed Phase 4F: idempotent demo seed for the acceptance scenario (`npm run seed:demo`)
 - Completed Phase 4F: `DELIVERY_PARTNER` organisation type (see `docs/DECISIONS/0002-organisation-type-naming.md`)
-- Future: real notification delivery, authorised photo proof storage, payout calculation and the remaining partner-app delivery workflows
+- Future: real notification transport, authorised photo proof, push registration and COD only if explicitly approved; payout and core partner delivery workflows are implemented
 
 ## Phase 1D - Authentication
 
@@ -120,7 +122,7 @@
 - Completed Phase 5: commission entries auto-created on delivery, provisional to final after the return window, with explicit reversal
 - Completed Phase 5: financial ledger separating farmer payment, distributor payable, marketplace commission, fulfilment fee, delivery fee and promoter commission
 - Completed Phase 5: settlement creation with generated settlement numbers, status lifecycle and audit
-- Remaining Phase 5: refunds and reconciliation (see WP-05 and WP-07 in `docs/REMAINING_IMPLEMENTATION_PLAN.md`)
+- Remaining Phase 5: connect the selected real payment/refund provider and signed refund-status webhook; returns/refunds/disputes and provider-neutral reconciliation are implemented
 
 ## Phase 6 - Partner Network
 
@@ -137,7 +139,7 @@
 - Completed Phase 7: Tally sync abstraction with sync records, attempts, retry state and a reconciliation endpoint (mock provider only)
 - Completed Phase 7: permission-scoped dashboard summary API with audited export
 - Completed cross-cutting: support ticket lifecycle (create, assign, wait, resume, escalate, resolve, close, reopen) with evidence
-- Remaining Phase 7: real notification providers and event wiring (WP-06), sandbox payment provider and signed webhooks (WP-07), portal dashboard wiring and demand reports (WP-09)
+- Remaining Phase 7: connect business-selected notification/payment providers and credentials; dashboard portal wiring is complete, while demand forecasting remains deferred until sufficient completed-season history exists
 
 ## Phase 8 - Platform infrastructure
 
@@ -147,30 +149,29 @@
 - Completed WP-06 (2026-08-18): per-channel notification provider abstraction, delivery worker on the `notifications` queue with retry and dead-lettering, a minute-interval dispatch sweep that required no producer changes, per-channel templates with language-aware SMS segment limits, recipient preferences protecting transactional categories, and OTPs routed through the SMS transport without ever being persisted as notification rows. All transports remain mock pending a BSP account.
 - Completed 2026-08-18: scheduled Kisan Club advisory generation, closing the temporary manual-trigger boundary recorded in `docs/DECISIONS/0009-advisory-content-governance.md`.
 - Completed 2026-08-18: Kisan Club demo seed data — an active membership with assigned promoter and territory, a farm and active wheat crop cycle, a Vardhnam-owned Club product with stock and a live offer, a platform-funded benefit rule and an approved bilingual advisory. See `docs/FARMER_APP_TESTING_GUIDE.md`.
-- Remaining Phase 8: WP-07 registers a handler on the `payment-webhooks` queue via `JobHandlerRegistry`. Real SMS, WhatsApp, push, email and payment providers all await external accounts rather than code.
+- Remaining Phase 8: real SMS, WhatsApp, push, email, payment/refund and cloud-storage adapters await business-selected providers, credentials and hosting decisions. The provider-neutral payment-webhook handler is implemented.
 
-## Not Started
+## Open or deferred work (current wording supersedes historical bullets)
 
-- Returns, refunds and disputes (WP-05) - the `ProductOrderStatus` return/refund/dispute values exist but no code can produce them
 - Service marketplace (WP-14)
-- Remaining partner delivery, promoter and service workflows beyond the authenticated role-routed shell; WP-13 now includes the first own-scoped farmer-lead capture/pipeline slice (WP-12, WP-13, WP-14)
+- Partner remainder: shared KYC submission, authorised photo proof, push registration, consented attendance/targets/training, COD only if approved, and service-provider workflows after WP-14
 - Product reviews and ratings
 - ~~File and document storage~~ - completed 2026-08-17, see Phase 8 above (WP-08)
 - ~~Background job infrastructure~~ - completed 2026-08-17, see Phase 8 above (WP-04)
 - Distributor allocation engine with recorded allocation reasons (WP-15)
-- GST modelling and invoice PDFs (WP-15)
-- Runtime internationalisation (WP-11)
-- Deployment infrastructure and observability (WP-16)
+- GST engineering and invoice/credit-note PDFs are implemented; chartered-accountant approval of classifications, rounding and legal templates remains open (WP-15)
+- Mobile runtime internationalisation is complete; business-portal Hindi remains open (WP-11r)
+- Deployment is partial: containerisation and API hardening are implemented; registry/orchestration, secrets, TLS/ingress, shared rate limits, observability and backup/restore remain open (WP-16)
 
 # Kisan Club delivery status
 
 - KC-01 membership foundation: completed 2026-08-11.
-- KC-02 farm and crop registry: backend implemented; dedicated-database integration run pending.
-- KC-03 promoter territories and assignments: backend implemented; dedicated-database integration run pending.
-- KC-04 Club catalogue programmes: backend implemented; dedicated-database integration run pending.
-- KC-05 Club pricing and finance: backend implemented 2026-08-11, including benefit administration/evaluation, checkout redemption, platform subsidy ledger treatment and refund-safe allocation; dedicated-database integration run pending.
+- KC-02 farm and crop registry: completed with dedicated-database integration coverage.
+- KC-03 promoter territories and assignments: completed with dedicated-database integration coverage.
+- KC-04 Club catalogue programmes: completed with dedicated-database integration coverage.
+- KC-05 Club pricing and finance: completed, including benefit administration/evaluation, checkout redemption, platform subsidy ledger treatment and refund-safe allocation, with dedicated-database integration coverage.
 - KC-06 Club fulfilment coordination: completed and dedicated-database verified 2026-08-14, including payment-confirmation assignment creation, scoped promoter queues, audited state transitions, explicit operations reassignment and independence from the seller order state machine.
-- KC-07 benefit tokens and assisted purchase: backend implemented 2026-08-11, including one-time hashed bearer tokens, expiry/attempt/replay controls, active-promoter resource scope, live checkout revalidation, normal inventory reservation and mandatory in-app payment; dedicated-database integration run pending.
+- KC-07 benefit tokens and assisted purchase: completed with one-time hashed bearer tokens, expiry/attempt/replay controls, active-promoter resource scope, live checkout revalidation, normal inventory reservation, mandatory in-app payment and dedicated-database integration coverage.
 - KC-08 farmer app Club module: completed and Flutter-verified 2026-08-14. The bilingual, membership-aware module includes dashboard gating, free join and resumable farm-profile completion, Club home/catalogue/detail and normal seller-offer commerce reuse, farmer-owned farms and crop cycles with activity/harvest recording, assigned-promoter visibility, consent-gated advisories, one-time benefit-token issuance, and duplicate-safe paginated token history with exact backend status filtering. Financial values and token lifecycle decisions remain backend-authoritative.
 - KC-09 advisory: completed 2026-08-13. Human-authored bilingual rule versioning, independent agronomist approval, deterministic crop-stage matching, consent-gated farmer events, localised in-app notifications, farmer read/dismiss flows and the permission-filtered business portal workspace are implemented. Focused HTTP/database acceptance coverage passes against a dedicated PostgreSQL test database.
 - KC-10 partner app Club module: completed and Flutter-verified 2026-08-14. KC-10A through KC-10D provide promoter/sales-partner-only navigation, backend-scoped assigned-farmer list/detail, allowlisted farm/crop presentation, idempotent one-time benefit-token redemption into a pending-payment assisted checkout, own-scope Club fulfilment inbox/detail/history with backend-validated coordination transitions, audited assigned-farmer farm/current-crop survey submission without precise-location collection, and recipient-scoped commission/payout statements using backend totals plus masked own-account status. Shared payout-account setup remains WP-12 rather than KC-10.

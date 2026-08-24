@@ -1,5 +1,15 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PermissionCode } from '../access/permission-codes';
 import { PermissionsGuard } from '../access/permissions.guard';
@@ -11,6 +21,12 @@ import { getRequestId } from '../common/middleware/correlation-id.middleware';
 import { ConfirmTallySyncAttemptDto } from './dto/confirm-tally-sync-attempt.dto';
 import { CreateTallySyncRecordDto } from './dto/create-tally-sync-record.dto';
 import { ListTallySyncRecordsQueryDto } from './dto/list-tally-sync-records-query.dto';
+import {
+  TallyReconciliationResponseDto,
+  TallySyncRecordDetailResponseEnvelopeDto,
+  TallySyncRecordPageResponseDto,
+  TallySyncRecordResponseEnvelopeDto,
+} from './dto/tally-response.dto';
 import { TallyService } from './tally.service';
 
 @ApiTags('tally')
@@ -30,18 +46,21 @@ export class TallyController {
   }
 
   @Get('sync-records')
+  @ApiOkResponse({ type: TallySyncRecordPageResponseDto })
   @RequirePermissions(PermissionCode.TALLY_SYNC_READ)
   listSyncRecords(@Query() query: ListTallySyncRecordsQueryDto) {
     return this.tallyService.listSyncRecords(query);
   }
 
   @Get('sync-records/:id')
+  @ApiOkResponse({ type: TallySyncRecordDetailResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.TALLY_SYNC_READ)
   getSyncRecordById(@Param('id', ParseUUIDPipe) id: string) {
     return this.tallyService.getSyncRecordById(id);
   }
 
   @Post('sync-records/:id/attempt')
+  @ApiCreatedResponse({ type: TallySyncRecordResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.TALLY_SYNC_MANAGE)
   attemptSync(
     @Param('id', ParseUUIDPipe) id: string,
@@ -53,6 +72,7 @@ export class TallyController {
   }
 
   @Get('reconciliation')
+  @ApiOkResponse({ type: TallyReconciliationResponseDto })
   @RequirePermissions(PermissionCode.TALLY_SYNC_READ)
   getReconciliationSummary() {
     return this.tallyService.getReconciliationSummary();

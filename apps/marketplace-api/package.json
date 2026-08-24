@@ -16,6 +16,8 @@
     "test:integration": "npm run test:integration:mock-auth && npm run test:integration:production-auth",
     "test:integration:mock-auth": "node --env-file-if-exists=../../.env ../../node_modules/jest/bin/jest.js --config jest.integration.config.cjs",
     "test:integration:production-auth": "node --env-file-if-exists=../../.env ../../node_modules/jest/bin/jest.js --config jest.integration.auth.config.cjs",
+    "openapi:generate": "npm run build && node --env-file-if-exists=../../.env dist/src/export-openapi.js",
+    "openapi:check": "npm run build && node --env-file-if-exists=../../.env dist/src/export-openapi.js --check",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "node --env-file-if-exists=../../.env ../../node_modules/prisma/build/index.js migrate dev --schema prisma/schema.prisma",
     "prisma:deploy": "node --env-file-if-exists=../../.env ../../node_modules/prisma/build/index.js migrate deploy --schema prisma/schema.prisma",

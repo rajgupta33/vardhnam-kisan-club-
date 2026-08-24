@@ -39,8 +39,8 @@ export default async function NotificationsPage({
 
   const [result, session] = await Promise.all([
     loadNotifications({
-      page: String(page),
-      limit: String(limit),
+      page,
+      limit,
       ...(status ? { status } : {}),
       ...(channel ? { channel } : {}),
     }),
@@ -67,7 +67,9 @@ export default async function NotificationsPage({
     {
       key: 'status',
       header: 'Status',
-      render: (row) => <StatusBadge label={labelFromCode(row.status)} tone={statusTone(row.status)} />,
+      render: (row) => (
+        <StatusBadge label={labelFromCode(row.status)} tone={statusTone(row.status)} />
+      ),
     },
     { key: 'attempts', header: 'Attempts', render: (row) => String(row.attemptCount) },
     { key: 'lastError', header: 'Last error', render: (row) => row.lastErrorMessage ?? '—' },
@@ -94,13 +96,26 @@ export default async function NotificationsPage({
   ];
 
   return (
-    <BusinessShell active="notifications" eyebrow="Delivery log" statuses={statuses} title="Notifications">
-      {readParam(resolved.notice) ? <div className="noticeBanner ok">{readParam(resolved.notice)}</div> : null}
-      {readParam(resolved.error) ? <div className="noticeBanner danger">{readParam(resolved.error)}</div> : null}
+    <BusinessShell
+      active="notifications"
+      eyebrow="Delivery log"
+      statuses={statuses}
+      title="Notifications"
+    >
+      {readParam(resolved.notice) ? (
+        <div className="noticeBanner ok">{readParam(resolved.notice)}</div>
+      ) : null}
+      {readParam(resolved.error) ? (
+        <div className="noticeBanner danger">{readParam(resolved.error)}</div>
+      ) : null}
 
       <section className="toolbar" aria-label="Notification filters">
         <div className="segmentedControl">
-          <FilterLink active={!status} href={buildHref(undefined, channel, 1)} label="All statuses" />
+          <FilterLink
+            active={!status}
+            href={buildHref(undefined, channel, 1)}
+            label="All statuses"
+          />
           {notificationStatusValues.map((value) => (
             <FilterLink
               active={status === value}
@@ -111,7 +126,11 @@ export default async function NotificationsPage({
           ))}
         </div>
         <div className="segmentedControl">
-          <FilterLink active={!channel} href={buildHref(status, undefined, 1)} label="All channels" />
+          <FilterLink
+            active={!channel}
+            href={buildHref(status, undefined, 1)}
+            label="All channels"
+          />
           {notificationChannelValues.map((value) => (
             <FilterLink
               active={channel === value}
@@ -155,7 +174,11 @@ function statusTone(status: NotificationDeliveryStatus): 'ok' | 'warn' | 'danger
 
 function FilterLink({ active, href, label }: { active: boolean; href: string; label: string }) {
   return (
-    <Link aria-current={active ? 'page' : undefined} className={active ? 'selected' : undefined} href={href}>
+    <Link
+      aria-current={active ? 'page' : undefined}
+      className={active ? 'selected' : undefined}
+      href={href}
+    >
       {label}
     </Link>
   );

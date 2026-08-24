@@ -9,6 +9,7 @@ import { formatDateTime, labelFromCode } from '../../../lib/format';
 import {
   loadDeadLetterJobs,
   loadQueues,
+  type AdminJobQueue,
   type DeadLetterEntry,
   type QueueDepth,
   type ScheduledJobDefinition,
@@ -30,12 +31,12 @@ export default async function AdminJobsPage({
   const canManage = session?.permissions.includes('jobs:manage') ?? false;
 
   const availableQueues = queuesResult.ok ? queuesResult.data.queues.map((q) => q.queue) : [];
-  const queue = readParam(resolved.queue) ?? availableQueues[0];
+  const requestedQueue = readParam(resolved.queue);
+  const queue: AdminJobQueue | undefined =
+    availableQueues.find((candidate) => candidate === requestedQueue) ?? availableQueues[0];
   const page = Math.max(1, Number.parseInt(readParam(resolved.page) ?? '1', 10) || 1);
 
-  const deadLetterResult = queue
-    ? await loadDeadLetterJobs({ queue, page: String(page), limit: String(limit) })
-    : undefined;
+  const deadLetterResult = queue ? await loadDeadLetterJobs({ queue, page, limit }) : undefined;
 
   const statuses = [
     {

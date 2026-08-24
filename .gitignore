@@ -35,6 +35,10 @@ apps/marketplace-api/prisma/dev.db
 pubspec.lock
 !apps/farmer-mobile/pubspec.lock
 **/build/
+**/key.properties
+**/*.jks
+**/*.keystore
+!**/key.properties.example
 
 # IDE
 .idea/
@@ -44,3 +48,6 @@ pubspec.lock
 # OS
 Thumbs.db
 .DS_Store
+
+# Stray tsx compile cache written when TMPDIR is unset
+**/undefined/

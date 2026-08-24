@@ -114,6 +114,22 @@ The example numbers above are placeholders and must be replaced with
 business-approved contacts. Missing or invalid values disable the corresponding
 external action while the in-app support-ticket flow remains available.
 
+Privacy, terms and account-deletion destinations are also build-time
+configuration. The Account screen always shows these entries, but opens them
+only when each value is a valid public HTTPS URL:
+
+```bash
+flutter run \
+  --dart-define=FARMER_PRIVACY_POLICY_URL=https://www.your-approved-domain.example/privacy \
+  --dart-define=FARMER_TERMS_URL=https://www.your-approved-domain.example/terms \
+  --dart-define=FARMER_ACCOUNT_DELETION_URL=https://www.your-approved-domain.example/delete-account
+```
+
+The example destinations are intentionally rejected placeholders. Replace
+them with stable, business-approved public pages. The deletion destination
+must lead to the real request and data-deletion workflow, not merely an
+informational page.
+
 The debug Android manifest permits clear-text traffic for local development.
 The main/release manifest does not enable clear-text traffic; staging and
 production API origins must use HTTPS.
@@ -132,6 +148,31 @@ On Windows, this repository and the configured Flutter package cache are on
 different drive roots. Kotlin incremental compilation is disabled in
 `android/gradle.properties` because Kotlin's cache path conversion does not
 support that layout. This changes Android build speed only.
+
+## Build a signed Play bundle
+
+Release builds never use the Android debug key. Copy
+`android/key.properties.example` to the ignored `android/key.properties`, point
+it to the approved Farmer Play upload keystore outside the repository and fill
+the local passwords. A release task fails with an actionable error when that
+configuration or keystore is missing; debug builds remain unchanged.
+
+Build an Android App Bundle only with an approved HTTPS production or staging
+API origin:
+
+```bash
+flutter build appbundle --release \
+  --dart-define=MARKETPLACE_API_BASE_URL=https://api.example.invalid \
+  --dart-define=FARMER_PRIVACY_POLICY_URL=https://www.your-approved-domain.example/privacy \
+  --dart-define=FARMER_TERMS_URL=https://www.your-approved-domain.example/terms \
+  --dart-define=FARMER_ACCOUNT_DELETION_URL=https://www.your-approved-domain.example/delete-account
+```
+
+Every value in that example is a placeholder and must be replaced before a
+release build is accepted for distribution.
+
+Never commit signing files or credentials. Follow
+`docs/PLAY_STORE_RELEASE_CHECKLIST.md` before uploading any bundle.
 
 ## Current boundary
 
@@ -165,6 +206,12 @@ Phone and WhatsApp support actions use the centrally supplied
 `FARMER_SUPPORT_PHONE` and `FARMER_SUPPORT_WHATSAPP` build values. Only valid
 E.164 values produce launcher actions. Launch failures are reported in-app and
 do not interfere with support tickets.
+
+Privacy policy, terms and account-deletion entries are available from Account
+in English and Hindi. Their public HTTPS destinations come only from the
+`FARMER_PRIVACY_POLICY_URL`, `FARMER_TERMS_URL` and
+`FARMER_ACCOUNT_DELETION_URL` build values. Missing, insecure, local or
+placeholder destinations stay disabled with an honest in-app message.
 
 The in-app notification inbox is API-backed and authenticated-user scoped. It
 supports pagination, an unread-only filter, pull/foreground refresh and audited

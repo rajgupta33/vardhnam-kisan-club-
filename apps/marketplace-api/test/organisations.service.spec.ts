@@ -13,6 +13,65 @@ describe('OrganisationsService', () => {
     permissions: [],
   };
 
+  it('projects only safe user identity fields from organisation reads', async () => {
+    const organisation = {
+      id: 'org-1',
+      type: OrganisationType.DISTRIBUTOR,
+      slug: 'demo-distributor',
+      legalName: 'Demo Distributor Private Limited',
+      displayName: 'Demo Distributor',
+      gstin: null,
+      registeredStateCode: null,
+      gstinVerifiedAt: null,
+      status: 'ACTIVE',
+      reviewedAt: null,
+      reviewedByUserId: null,
+      reviewedBy: null,
+      reviewReason: null,
+      createdAt: new Date('2026-08-24T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-24T00:00:00.000Z'),
+      memberships: [],
+    };
+    const prisma = {
+      organisation: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest.fn().mockResolvedValue(organisation),
+      },
+      organisationMembership: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $transaction: jest.fn((operations) => Promise.all(operations)),
+    };
+    const service = new OrganisationsService(prisma as never, { record: jest.fn() } as never);
+
+    await service.list({ page: 1, limit: 25 });
+    await service.getById(organisation.id);
+    await service.listMemberships(organisation.id);
+
+    const listSelection = prisma.organisation.findMany.mock.calls[0]?.[0]?.select;
+    const detailSelection = prisma.organisation.findUnique.mock.calls[0]?.[0]?.select;
+    const membershipSelection = prisma.organisationMembership.findMany.mock.calls[0]?.[0]?.select;
+    const expectedUserSelection = {
+      id: true,
+      email: true,
+      phone: true,
+      status: true,
+      profile: { select: { displayName: true } },
+    };
+
+    expect(listSelection.reviewedBy.select).toEqual(expectedUserSelection);
+    expect(detailSelection.reviewedBy.select).toEqual(expectedUserSelection);
+    expect(detailSelection.memberships.select.user.select).toEqual(expectedUserSelection);
+    expect(membershipSelection.user.select).toEqual(expectedUserSelection);
+    expect(membershipSelection.organisation.select.reviewedBy.select).toEqual(
+      expectedUserSelection,
+    );
+    expect(JSON.stringify({ listSelection, detailSelection, membershipSelection })).not.toContain(
+      'passwordHash',
+    );
+  });
+
   it('creates an organisation with an audit log', async () => {
     const auditService = { record: jest.fn().mockResolvedValue({}) };
     const tx = {

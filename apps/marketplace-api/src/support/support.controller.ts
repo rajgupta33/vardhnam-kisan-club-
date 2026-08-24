@@ -9,7 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PermissionCode } from '../access/permission-codes';
 import { PermissionsGuard } from '../access/permissions.guard';
@@ -25,6 +25,10 @@ import { ListSupportTicketsQueryDto } from './dto/list-support-tickets-query.dto
 import { MarkSupportTicketWaitingDto } from './dto/mark-support-ticket-waiting.dto';
 import { ResolveSupportTicketDto } from './dto/resolve-support-ticket.dto';
 import { SupportTicketActionDto } from './dto/support-ticket-action.dto';
+import {
+  SupportTicketPageResponseDto,
+  SupportTicketResponseEnvelopeDto,
+} from './dto/support-ticket-response.dto';
 import { SupportService } from './support.service';
 
 @ApiTags('support')
@@ -44,6 +48,7 @@ export class SupportController {
   }
 
   @Get('tickets')
+  @ApiOkResponse({ type: SupportTicketPageResponseDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_READ_ANY)
   listTickets(@Query() query: ListSupportTicketsQueryDto) {
     return this.supportService.listTickets(query);
@@ -59,6 +64,7 @@ export class SupportController {
   }
 
   @Get('tickets/:ticketId')
+  @ApiOkResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_READ_OWN)
   getTicketById(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -79,6 +85,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/assign')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   assignTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -90,6 +97,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/mark-waiting')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   markWaiting(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -101,6 +109,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/resume')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   resumeTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -112,6 +121,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/escalate')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   escalateTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -123,6 +133,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/resolve')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   resolveTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -134,6 +145,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/close')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   closeTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
@@ -145,6 +157,7 @@ export class SupportController {
   }
 
   @Post('tickets/:ticketId/reopen')
+  @ApiCreatedResponse({ type: SupportTicketResponseEnvelopeDto })
   @RequirePermissions(PermissionCode.SUPPORT_TICKETS_MANAGE)
   reopenTicket(
     @Param('ticketId', ParseUUIDPipe) ticketId: string,

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { portalThemeStyle } from '../lib/portal-theme';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -13,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en-IN">
+    <html lang="en-IN" style={portalThemeStyle}>
       <body>{children}</body>
     </html>
   );

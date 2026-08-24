@@ -10,7 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AccessService } from '../access/access.service';
 import { PermissionCode } from '../access/permission-codes';
@@ -23,6 +23,10 @@ import { getRequestId } from '../common/middleware/correlation-id.middleware';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { ListOrganisationsQueryDto } from './dto/list-organisations-query.dto';
+import {
+  OrganisationDetailResponseEnvelopeDto,
+  OrganisationPageResponseDto,
+} from './dto/organisation-response.dto';
 import { ReviewOrganisationDto } from './dto/review-organisation.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
@@ -38,12 +42,14 @@ export class OrganisationsController {
   ) {}
 
   @Get()
+  @ApiOkResponse({ type: OrganisationPageResponseDto })
   @RequirePermissions(PermissionCode.ORGANISATIONS_READ_ANY)
   list(@Query() query: ListOrganisationsQueryDto) {
     return this.organisationsService.list(query);
   }
 
   @Get(':organisationId')
+  @ApiOkResponse({ type: OrganisationDetailResponseEnvelopeDto })
   async getById(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
     @CurrentUserContext() actor: CurrentUser,

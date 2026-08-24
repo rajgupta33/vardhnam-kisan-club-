@@ -12,7 +12,7 @@ Phase 0 establishes a modular monorepo with one backend API, one business web po
 - `apps/partner-mobile`: Flutter partner mobile app skeleton with role-based partner surface.
 - `packages/shared-types`: shared TypeScript enums and API response types.
 - `packages/validation`: shared validation constants and schemas.
-- `packages/api-client`: generated-client destination and lightweight placeholder client.
+- `packages/api-client`: existing domain client plus OpenAPI-generated path/schema types and `openapi-fetch` transport used for incremental migration.
 - `packages/design-tokens`: shared colours, spacing and typography tokens.
 - `infrastructure`: local database, Docker and CI documentation.
 
@@ -39,7 +39,9 @@ The backend uses NestJS modules instead of route-handler business logic. Foundat
 - `PaymentsModule`
 - `AuditModule`
 
-The API prefix is `/api/v1`. OpenAPI is exposed at `/api/docs` in non-production environments.
+The API prefix is `/api/v1`. OpenAPI is exposed at `/api/docs` in non-production environments and committed at `apps/marketplace-api/openapi.json`. Both are built by the same scanner. CI runs `npm run check:openapi` and fails when controller or DTO metadata drifts from the committed artifact; generation compiles and scans the Nest module graph without starting a listening server. See `docs/DECISIONS/0018-committed-openapi-contract.md`.
+
+`openapi-typescript` deterministically generates `packages/api-client/src/generated/openapi.ts` from that committed artifact. CI runs `npm run check:api-client` after the OpenAPI drift gate. `openapi-fetch` consumes the generated `paths` type; the business portal Admin Jobs, Notifications, Tally, Dashboard, Support, Payout, Organisation list/detail and User list/detail workflows are migrated while the older client remains available for the remaining domains. See `docs/DECISIONS/0019-incremental-generated-typescript-client.md`.
 
 ## Data
 

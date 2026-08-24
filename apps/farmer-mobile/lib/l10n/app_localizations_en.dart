@@ -424,6 +424,21 @@ class AppLocalizationsEn extends AppLocalizations {
   String get supportAccountLabel => 'Support';
 
   @override
+  String get privacyPolicyLabel => 'Privacy policy';
+
+  @override
+  String get termsAndConditionsLabel => 'Terms and conditions';
+
+  @override
+  String get requestAccountDeletionLabel => 'Request account deletion';
+
+  @override
+  String get legalLinkNotConfigured => 'This legal page is not available yet.';
+
+  @override
+  String get legalLinkOpenFailed => 'Could not open the selected legal page.';
+
+  @override
   String get farmProfileSubtitle =>
       'Keep your location and crop interests up to date.';
 

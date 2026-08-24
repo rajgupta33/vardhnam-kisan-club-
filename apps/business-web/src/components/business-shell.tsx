@@ -4,6 +4,15 @@ import { portalCopy } from '../content/portal-copy';
 import { readPortalSession } from '../lib/auth-session';
 
 type NavKey = (typeof portalCopy.navItems)[number]['key'];
+type NavGroup = (typeof portalCopy.navItems)[number]['group'];
+
+const navigationGroupOrder: readonly NavGroup[] = [
+  'overview',
+  'commerce',
+  'kisanClub',
+  'operations',
+  'administration',
+];
 
 interface BusinessShellProps {
   active: NavKey;
@@ -31,6 +40,9 @@ export async function BusinessShell({
 
   return (
     <main className="shell">
+      <a className="skipLink" href="#main-content">
+        Skip to main content
+      </a>
       <aside className="sidebar" aria-label={portalCopy.navigationLabel}>
         <div className="brandBlock">
           <span className="brandMark">VA</span>
@@ -39,17 +51,36 @@ export async function BusinessShell({
             <h1>{portalCopy.title}</h1>
           </div>
         </div>
+        <input className="navToggle" id="portal-navigation-toggle" type="checkbox" />
+        <label className="navToggleLabel" htmlFor="portal-navigation-toggle">
+          <span>{portalCopy.navigationMenuLabel}</span>
+          <span aria-hidden="true">Menu</span>
+        </label>
         <nav className="navList">
-          {navigation.map((item) => (
-            <Link
-              aria-current={active === item.key ? 'page' : undefined}
-              className={active === item.key ? 'active' : undefined}
-              href={item.href}
-              key={item.href}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {navigationGroupOrder.map((group) => {
+            const items = navigation.filter((item) => item.group === group);
+            if (items.length === 0) {
+              return null;
+            }
+
+            return (
+              <section className="navGroup" key={group}>
+                <h2 className="navGroupLabel">{portalCopy.navigationGroups[group]}</h2>
+                <div className="navGroupLinks">
+                  {items.map((item) => (
+                    <Link
+                      aria-current={active === item.key ? 'page' : undefined}
+                      className={active === item.key ? 'active' : undefined}
+                      href={item.href}
+                      key={item.href}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </nav>
 
         {session ? (
@@ -75,7 +106,7 @@ export async function BusinessShell({
         ) : null}
       </aside>
 
-      <section className="workspace">
+      <section className="workspace" id="main-content" tabIndex={-1}>
         <header className="workspaceHeader">
           <div>
             <p className="eyebrow">{eyebrow}</p>
