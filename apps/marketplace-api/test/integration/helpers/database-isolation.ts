@@ -12,22 +12,23 @@ export async function resetIntegrationDatabase(): Promise<void> {
     );
   }
   await prisma.$connect();
-  await prisma.$executeRawUnsafe(`
-    DO $$
-    DECLARE table_record RECORD;
-    BEGIN
-      FOR table_record IN
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = 'public'
-          AND tablename <> '_prisma_migrations'
-      LOOP
-        EXECUTE 'TRUNCATE TABLE "'
-          || replace(table_record.tablename, '"', '""')
-          || '" RESTART IDENTITY CASCADE';
-      END LOOP;
-    END $$;
-  `);
+  // One TRUNCATE naming every table, rather than one statement per table. This
+  // hook runs before all 35 spec files, and a per-table loop takes and releases
+  // an ACCESS EXCLUSIVE lock on each of the ~150 tables in turn -- slow enough
+  // on a loaded machine to blow the 30s hook timeout intermittently. Naming them
+  // together locks and scans once.
+  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename <> '_prisma_migrations'
+  `;
+  if (tables.length > 0) {
+    const quoted = tables
+      .map(({ tablename }) => `"${tablename.replace(/"/g, '""')}"`)
+      .join(', ');
+    await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${quoted} RESTART IDENTITY CASCADE`);
+  }
 
   // The truncation above also removes reference data that production gets from
   // migration INSERTs. Prisma will not re-run an applied migration, so restoring

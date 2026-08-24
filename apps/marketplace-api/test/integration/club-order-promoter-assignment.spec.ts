@@ -393,6 +393,7 @@ async function seedClubOrderData(): Promise<{
     suffix,
     // Approved and still valid: the promoter should receive the order.
     kycExpiresAt: futureDate(365),
+    promoterOrganisationType: OrganisationType.VARDHNAM,
   });
   const expiredKyc = await createClubFarmerWithPromoter({
     label: 'expired',
@@ -400,6 +401,11 @@ async function seedClubOrderData(): Promise<{
     // Approved but lapsed. Everything else about this promoter is eligible, so
     // the expiry is the only thing that can disqualify them.
     kycExpiresAt: futureDate(-1),
+    // Deliberately a partner organisation rather than VARDHNAM. First-party
+    // organisations are verified by being first-party (see
+    // `promoter-eligibility.ts`), so an expired document on a VARDHNAM org
+    // proves nothing -- this case would pass no matter what the KYC rule did.
+    promoterOrganisationType: OrganisationType.SERVICE_PROVIDER,
   });
 
   return { offerId: offer.id, eligible, expiredKyc };
@@ -409,12 +415,13 @@ async function createClubFarmerWithPromoter(input: {
   label: string;
   suffix: string;
   kycExpiresAt: Date;
+  promoterOrganisationType: OrganisationType;
 }): Promise<ClubFarmerFixture> {
-  const { label, suffix, kycExpiresAt } = input;
+  const { label, suffix, kycExpiresAt, promoterOrganisationType } = input;
   const short = `${label}-${suffix.slice(0, 6)}`;
 
   const promoterOrganisation = await createOrganisation({
-    type: OrganisationType.VARDHNAM,
+    type: promoterOrganisationType,
     slug: `club-assign-promoter-org-${label}-${suffix}`,
     legalName: `Club Assignment Promoter Network ${label}`,
     displayName: `Club Assignment Promoter Network ${label}`,
