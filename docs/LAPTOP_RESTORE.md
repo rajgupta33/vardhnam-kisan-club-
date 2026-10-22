@@ -177,9 +177,32 @@ with append-only persistence initially disabled; confirm the keys load before
 enabling AOF. Existing AOF files can take precedence over an RDB file.
 
 The backup is STILL LOCAL and must be copied to verified off-device storage
-before formatting. A separate running Supabase project named
-`vardhnam-fieldforce` was observed; its databases and storage volumes are outside
-this repository's backup scope and have not been exported here.
+before formatting.
+
+## FieldForce added to the same private folder
+
+At the user's request, the local `vardhnam-fieldforce` Supabase project was added
+under `.private-backup/pre-format-2026-10-22/fieldforce/`. It includes 873 verified
+source/configuration files (including pending edits and private environments), a
+verified complete Git history bundle, three logical database dumps, role exports,
+external PostgreSQL configuration, storage and edge-runtime volume archives, and
+private Docker container configuration. Four linked worktrees were clean and their
+commits are included in the history bundle.
+
+The logical globals replay encountered a role-grant ordering error, so a complete
+cold database-volume backup was also taken with the original database briefly
+stopped and subsequently restarted. That cluster started successfully in isolation
+using the matching Supabase PostgreSQL 17 image. All three databases were readable;
+113 main database tables and one vector table matched live counts. The 39 analytics
+tables were readable but live counts had changed after capture. This tested cold
+archive is the preferred FieldForce database recovery path. Recovery instructions
+and a SHA-256 manifest are inside the private FieldForce folder (899 files, about
+180.4 MiB before its manifest). No private exports were committed to GitHub.
+
+This covers local Docker data, not separately hosted cloud databases. Upload the
+entire `pre-format-2026-10-22` folder once, confirm the upload/download integrity,
+and retain it before uninstalling Docker or formatting the laptop. The 54 possible
+antivirus-test files in the agriculture app remain unverified as described above.
 
 Preserving a working tree does not certify that every app builds. Existing farmer
 iOS project settings include `ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS
