@@ -53,7 +53,7 @@ Observed local paths are informational; they need not remain identical:
   download Gradle; no global Gradle installation or cache backup is required.
 - Node **22.13.0** is the CI baseline; use at least the repository's declared
   minimum. Local Node was 22.12.0, below that minimum.
-- npm 10 or newer, Git, Docker Desktop with WSL2, Android Studio/SDK tools.
+- npm 10 or newer, Git with Git LFS, Docker Desktop with WSL2, Android Studio/SDK tools.
 - PostgreSQL 16 Alpine and Redis 7 Alpine are declared in Compose.
 - iOS builds require macOS and Xcode; Windows cannot validate iOS release builds.
 
@@ -64,8 +64,10 @@ caches are regenerable with internet access. They are intentionally not in Git.
 ## Restore source and dependencies (PowerShell)
 
 ```powershell
+git lfs install
 git clone --branch backup/pre-format-2026-10-22 https://github.com/rajgupta33/vardhnam-kisan-club-.git
 Set-Location vardhnam-kisan-club-
+git lfs pull
 git status --short
 npm ci
 npm run prisma:generate
@@ -118,6 +120,15 @@ Integration tests must use a separate test database: they erase test tables.
 See README.md and docs/FARMER_APP_TESTING_GUIDE.md for runtime settings.
 
 ## Limits of this snapshot
+
+The source snapshot `c44524c` was pushed and cloned back from GitHub. Seventeen
+scaffold tests and both apps' translation-key parity checks passed. This backup
+task did not run the complete application lint/typecheck/build/test suites.
+The private local copies of `.env`, farmer signing key/properties, both internal
+test APKs and the user's Android debug keystore were compared with their originals
+using SHA-256. No off-device private destination has been supplied or verified.
+Docker remained unresponsive after starting Desktop, so PostgreSQL/Redis were
+not exported or restore-tested.
 
 Windows antivirus blocked reading some files in local `.storage/return_evidence/`
 during backup checksum verification. These may be scanner-test fixtures, but that
