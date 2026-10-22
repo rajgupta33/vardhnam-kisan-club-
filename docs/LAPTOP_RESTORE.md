@@ -124,6 +124,11 @@ See README.md and docs/FARMER_APP_TESTING_GUIDE.md for runtime settings.
 The source snapshot `c44524c` was pushed and cloned back from GitHub. Seventeen
 scaffold tests and both apps' translation-key parity checks passed. This backup
 task did not run the complete application lint/typecheck/build/test suites.
+The fresh clone passed `git fsck --full`; Docker/lockfile text matched after
+normalizing Git line endings and both Gradle wrapper JAR hashes matched. Four
+older APKs in `artifacts/` are tracked through Git LFS. `git lfs push --all`
+succeeded, but their fresh-download verification stalled and was cancelled;
+their remote download recovery remains unverified.
 The private local copies of `.env`, farmer signing key/properties, both internal
 test APKs and the user's Android debug keystore were compared with their originals
 using SHA-256. No off-device private destination has been supplied or verified.
