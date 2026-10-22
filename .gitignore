@@ -34,6 +34,7 @@ apps/marketplace-api/prisma/dev.db
 .flutter-plugins-dependencies
 pubspec.lock
 !apps/farmer-mobile/pubspec.lock
+!apps/partner-mobile/pubspec.lock
 **/build/
 **/key.properties
 **/*.jks
@@ -51,3 +52,7 @@ Thumbs.db
 
 # Stray tsx compile cache written when TMPDIR is unset
 **/undefined/
+
+# Local recovery archives and distributable builds (never source backups)
+.private-backup/
+artifacts/internal-testing/*.apk

@@ -29,6 +29,8 @@ Managed agriculture marketplace for Vardhnam Agrotech.
 
 ## Local Prerequisites
 
+Before formatting or moving laptops, follow [the backup and restoration guide](docs/LAPTOP_RESTORE.md).
+
 - Node.js 22.13 or newer
 - npm 10 or newer
 - Docker Desktop for PostgreSQL and Redis
