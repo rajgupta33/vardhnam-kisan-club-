@@ -134,7 +134,8 @@ The private local copies of `.env`, farmer signing key/properties, both internal
 test APKs and the user's Android debug keystore were compared with their originals
 using SHA-256. No off-device private destination has been supplied or verified.
 Docker remained unresponsive after starting Desktop, so PostgreSQL/Redis were
-not exported or restore-tested.
+initially not exported or restore-tested. This blocker was resolved in the
+subsequent Docker recovery check below.
 
 Windows antivirus blocked reading some files in local `.storage/return_evidence/`
 during backup checksum verification. These may be scanner-test fixtures, but that
@@ -146,7 +147,39 @@ the integration suite contains an EICAR antivirus fixture consistent with this
 size, but individual blocked files were not inspected. See the private
 `STORAGE-VERIFICATION.json` for the per-file result. The five critical file pairs
 and Android debug key also passed the repeat checksum comparison. Docker was
-retried after launching Desktop and still timed out, so no database export exists.
+retried after launching Desktop and initially still timed out.
+
+## Successful Docker backup recheck — 2026-10-22
+
+After Docker became available, private exports were created under
+`.private-backup/pre-format-2026-10-22/data-export/`:
+
+- `vardhnam_agrotech.dump`, `vardhnam_agrotech_test.dump`, `postgres.dump`:
+  PostgreSQL custom-format logical backups.
+- `postgres-globals.sql`: PostgreSQL roles/settings; contains private information.
+- `redis.rdb`: Redis snapshot, 532 keys, no expiring keys at verification time.
+- Per-table count reports and `SHA256-MANIFEST.json` for the export files.
+
+All three database dumps restored with `pg_restore --exit-on-error` into fresh,
+network-isolated PostgreSQL 16 containers. Public-table row counts matched the
+originals: 85 tables in each app database and zero in `postgres`. The globals
+export was saved but not replayed in the restore test (the required `vardhnam`
+role was provisioned separately). Redis 7.4.10 validated the RDB checksum and
+loaded all 532 keys in a network-isolated verification container. Temporary
+verification containers were then removed; original services/data were retained.
+
+These are sequential live snapshots, not an atomic cross-database/Redis snapshot.
+New work after export is not included. For final recovery, keep workers stopped
+until restored queue jobs and provider configuration have been reviewed.
+Restore PostgreSQL dumps into empty databases using PostgreSQL 16's `pg_restore`.
+To restore Redis, load `redis.rdb` as `dump.rdb` in a fresh Redis data directory
+with append-only persistence initially disabled; confirm the keys load before
+enabling AOF. Existing AOF files can take precedence over an RDB file.
+
+The backup is STILL LOCAL and must be copied to verified off-device storage
+before formatting. A separate running Supabase project named
+`vardhnam-fieldforce` was observed; its databases and storage volumes are outside
+this repository's backup scope and have not been exported here.
 
 Preserving a working tree does not certify that every app builds. Existing farmer
 iOS project settings include `ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS
