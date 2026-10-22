@@ -126,9 +126,10 @@ scaffold tests and both apps' translation-key parity checks passed. This backup
 task did not run the complete application lint/typecheck/build/test suites.
 The fresh clone passed `git fsck --full`; Docker/lockfile text matched after
 normalizing Git line endings and both Gradle wrapper JAR hashes matched. Four
-older APKs in `artifacts/` are tracked through Git LFS. `git lfs push --all`
-succeeded, but their fresh-download verification stalled and was cancelled;
-their remote download recovery remains unverified.
+older APKs in `artifacts/` are tracked through Git LFS. On the October 22 recheck,
+all four downloaded successfully into the fresh clone, passed `git lfs fsck`,
+and matched the original local APKs by SHA-256. The earlier stalled download
+is resolved. The clone was also updated to the latest backup documentation.
 The private local copies of `.env`, farmer signing key/properties, both internal
 test APKs and the user's Android debug keystore were compared with their originals
 using SHA-256. No off-device private destination has been supplied or verified.
@@ -139,6 +140,13 @@ Windows antivirus blocked reading some files in local `.storage/return_evidence/
 during backup checksum verification. These may be scanner-test fixtures, but that
 has not been established for each file. Do not disable antivirus to copy them.
 Any manifest entries without a SHA-256 hash are unverified, not successful backups.
+On the October 22 recheck, 232 uploaded files matched their local backup copies
+by SHA-256. Another 54 files of 68 bytes were deliberately left unverified;
+the integration suite contains an EICAR antivirus fixture consistent with this
+size, but individual blocked files were not inspected. See the private
+`STORAGE-VERIFICATION.json` for the per-file result. The five critical file pairs
+and Android debug key also passed the repeat checksum comparison. Docker was
+retried after launching Desktop and still timed out, so no database export exists.
 
 Preserving a working tree does not certify that every app builds. Existing farmer
 iOS project settings include `ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS
